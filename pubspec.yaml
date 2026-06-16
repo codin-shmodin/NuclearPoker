@@ -1,0 +1,23 @@
+name: nuclear_poker
+description: "NuclearPoker — a gamified poker app. Quest 1: One Card Poker."
+publish_to: "none"
+version: 0.1.0+1
+
+environment:
+  # Color.withValues(...) used in the UI requires Flutter 3.27+ / Dart 3.6+.
+  sdk: ">=3.6.0 <4.0.0"
+  flutter: ">=3.27.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.6
+  flutter_animate: ^4.5.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+
+flutter:
+  uses-material-design: true
