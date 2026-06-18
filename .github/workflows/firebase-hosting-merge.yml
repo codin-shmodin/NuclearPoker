@@ -16,7 +16,9 @@ jobs:
           channel: stable
           flutter-version: '3.44.2'
       - run: flutter pub get
-      - run: flutter build web --release
+      # --pwa-strategy=none: ship no service worker, so a push goes live on the
+      # next load instead of needing a second reload to clear the SW cache.
+      - run: flutter build web --release --pwa-strategy=none
       - uses: FirebaseExtended/action-hosting-deploy@v0
         with:
           repoToken: ${{ secrets.GITHUB_TOKEN }}

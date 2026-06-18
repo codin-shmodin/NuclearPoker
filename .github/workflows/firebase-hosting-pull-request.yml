@@ -18,7 +18,7 @@ jobs:
           channel: stable
           flutter-version: '3.44.2'
       - run: flutter pub get
-      - run: flutter build web --release
+      - run: flutter build web --release --pwa-strategy=none
       - uses: FirebaseExtended/action-hosting-deploy@v0
         with:
           repoToken: ${{ secrets.GITHUB_TOKEN }}
