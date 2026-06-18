@@ -8,7 +8,9 @@ import '../headsup_controller.dart';
 /// with, for the lines that resolve when the bot answers. A "?" marks a card
 /// where your action hands the decision back to you (we don't guess your next
 /// move). Colour runs bright red (lose a lot) → grey (≈0) → bright green (win a
-/// lot). The footer shows the average across the known (non-"?") cards.
+/// lot). Each cell is labelled by the kind of spot it is (Value / Fold Equity /
+/// Paid Off / …). The footer shows the average across the known (non-"?") cards,
+/// but hides it when most of the range answers aggressively (mostly "?").
 class EvBar extends StatelessWidget {
   const EvBar({super.key, required this.title, required this.cells});
 
@@ -26,9 +28,15 @@ class EvBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final anyActive = cells.any((c) => c.active);
-    final known = cells.where((c) => c.active && !c.unknown).toList();
-    final average = known.isEmpty
+    final active = cells.where((c) => c.active).toList();
+    final anyActive = active.isNotEmpty;
+    final known = active.where((c) => !c.unknown).toList();
+    // When most of the bot's range answers aggressively (re-raise / bet), most
+    // cells are "?", so the Avg would be the mean of a tiny leftover sample —
+    // misleading. In that spot we hide it: there's no honest average to show.
+    final mostlyAggressive =
+        anyActive && (active.length - known.length) * 2 > active.length;
+    final average = (known.isEmpty || mostlyAggressive)
         ? null
         : known.fold<int>(0, (sum, c) => sum + c.ev) / known.length;
     return Container(
@@ -89,7 +97,9 @@ class EvBar extends StatelessWidget {
 
   static String _signed(double v) {
     final s = v.abs() < 0.05 ? '0' : v.toStringAsFixed(1);
-    return v > 0.05 ? '+$s' : (v < -0.05 ? '-${v.abs().toStringAsFixed(1)}' : s);
+    return v > 0.05
+        ? '+$s'
+        : (v < -0.05 ? '-${v.abs().toStringAsFixed(1)}' : s);
   }
 }
 
@@ -160,40 +170,44 @@ class _EvRow extends StatelessWidget {
           _rankLabel(true),
           const SizedBox(width: 4),
           Expanded(
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 300),
-              alignment: Alignment.center,
-              padding: const EdgeInsets.symmetric(horizontal: 3),
-              decoration: BoxDecoration(
-                color: EvBar.colorFor(cell.color),
-                borderRadius: BorderRadius.circular(3),
-              ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Flexible(
-                    child: Text(
-                      cell.label,
-                      overflow: TextOverflow.fade,
-                      softWrap: false,
+            child: Tooltip(
+              message: cell.label,
+              waitDuration: const Duration(milliseconds: 300),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 300),
+                alignment: Alignment.center,
+                padding: const EdgeInsets.symmetric(horizontal: 3),
+                decoration: BoxDecoration(
+                  color: EvBar.colorFor(cell.color),
+                  borderRadius: BorderRadius.circular(3),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Flexible(
+                      child: Text(
+                        cell.label,
+                        overflow: TextOverflow.fade,
+                        softWrap: false,
+                        style: const TextStyle(
+                          fontSize: 7.5,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: 0.2,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 2),
+                    Text(
+                      _chips(cell.ev),
                       style: const TextStyle(
-                        fontSize: 7.5,
-                        fontWeight: FontWeight.w800,
-                        letterSpacing: 0.2,
+                        fontSize: 10,
+                        fontWeight: FontWeight.w900,
                         color: Colors.white,
                       ),
                     ),
-                  ),
-                  const SizedBox(width: 2),
-                  Text(
-                    _chips(cell.ev),
-                    style: const TextStyle(
-                      fontSize: 10,
-                      fontWeight: FontWeight.w900,
-                      color: Colors.white,
-                    ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
           ),

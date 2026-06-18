@@ -58,13 +58,25 @@ The whole point is the "compared to what?" baseline: every number is *net chips 
 is −(what you'd already put in), a check that goes to showdown is ±the blind, and a bet the bot folds
 to wins exactly the bot's committed chips (the uncalled part comes back).
 
-| Label | When | Value (net chips this hand) |
-|---|---|---|
-| **FOLDS** | you bet/raise, he folds | + his committed chips |
-| **WIN / LOSE** | the hand reaches showdown, you're ahead / behind | ± the matched amount |
-| **SPLIT** | a tie at showdown | 0 |
-| **FOLD** | you fold | − the chips you already put in |
-| **?** | your action hands the decision back to you | *unknown — see below* |
+Each card's cell is labelled by **what kind of spot it is** — your action × his transparent
+reply × who's ahead — not just the raw outcome:
+
+| Your action | His reply | His card vs yours | Label | Value (net chips) |
+|---|---|---|---|---|
+| Bet / raise | folds | worse | **No Value** | + his committed chips |
+| Bet / raise | folds | same | **Split Fold Eq** | + his committed chips |
+| Bet / raise | folds | better | **Fold Equity** | + his committed chips |
+| Bet / raise | calls | worse | **Value** | + the matched amount |
+| Bet / raise | calls | same | **Split** | 0 |
+| Bet / raise | calls | better | **Called by Better** | − the matched amount |
+| Call | showdown | better (yours) | **Showdown Value** | + the matched amount |
+| Call | showdown | worse (yours) | **Paid Off** | − the matched amount |
+| Call | showdown | same | **Split** | 0 |
+| Check / fold | — | — | *(no label)* | the chips, uncommented |
+| (any) | ball comes back | — | **?** | *unknown — see below* |
+
+Long labels fade in the narrow cell but show in full on hover (tooltip). Check and fold lines
+show only the chip number — there's nothing strategic to teach about checking through or folding.
 
 **The "?" — the deliberate gap.** We give a number only for lines that finish on the bot's next
 action. The one case that *doesn't* is **you aggress and the bot re-raises** (or **you check and the
@@ -74,7 +86,9 @@ refuse to model your future for you — that's the next decision to think throug
 
 **Avg.** Below the bar an **Avg** figure is the mean of the known cells — every card **except** the
 "?"s — i.e. the average net chips this action books across the part of the bot's range that resolves
-right now.
+right now. **When most of the bot's range answers aggressively** (it re-raises your bet, or bets into
+your check) most cells are "?", so the Avg would be the mean of a tiny leftover sample — misleading.
+In that spot we hide it: there's no honest average to show.
 
 > `engine/ev/ev_calculator.dart` (exact best-response EV by backward induction; `test/ev_test.dart`)
 > still exists as a solver but is **not** shown to the player — deliberately, so the trainer makes you

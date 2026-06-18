@@ -17,8 +17,17 @@ class ImmediateEv {
   /// Net chips, signed. Profit (+) or loss (−) from the start of the hand.
   final int ev;
 
-  /// Short category label: WIN / LOSE / SPLIT (showdown), FOLDS (villain folds,
-  /// we win his chips) or FOLD (we fold, we lose what we put in).
+  /// Short strategic label describing *this card's* result for hero's action —
+  /// what kind of spot it is, not just the outcome. Depends on hero's action,
+  /// the villain's transparent reply, and who's ahead:
+  ///
+  /// Hero bets/raises, villain **folds**:
+  ///   worse card → `No Value` · same card → `Split Fold Eq` · better → `Fold Equity`
+  /// Hero bets/raises, villain **calls** (showdown):
+  ///   worse → `Value` · same → `Split` · better → `Called by Better`
+  /// Hero **calls** (showdown):
+  ///   ahead → `Showdown Value` · behind → `Paid Off` · tie → `Split`
+  /// Hero **checks / folds**: no label (empty) — nothing to teach there.
   final String label;
 }
 
@@ -74,22 +83,52 @@ class ImmediateEvCalculator {
     // Ball back in hero's court → unknown; we don't model hero's next move.
     if (s.phase == HandPhase.betting && s.toAct == heroSeat) return null;
 
-    return _terminal(s, heroCard, villainCard);
+    return _terminal(s, heroCard, villainCard, action);
   }
 
-  /// Hero's net profit from the start of the hand at a resolved node. A fold
-  /// returns the folder's own chips, so the winner's profit is exactly the
-  /// loser's committed chips (an uncalled bet comes straight back).
-  ImmediateEv _terminal(HandState s, int heroCard, int villainCard) {
+  /// Hero's net profit from the start of the hand at a resolved node, plus a
+  /// strategic label for the spot (see [ImmediateEv.label]). A fold returns the
+  /// folder's own chips, so the winner's profit is exactly the loser's committed
+  /// chips (an uncalled bet comes straight back).
+  ImmediateEv _terminal(
+      HandState s, int heroCard, int villainCard, ActionType action) {
     final hero = s.seats[heroSeat];
     final villain = s.seats[botSeat];
-    if (hero.folded) return ImmediateEv(-hero.committed, 'FOLD');
-    if (villain.folded) return ImmediateEv(villain.committed, 'FOLDS');
-    if (heroCard == villainCard) return const ImmediateEv(0, 'SPLIT');
+
+    // bet == bet-or-raise (a pot is a bet here); call is a showdown call.
+    // Check/fold are passive — no teaching label.
+    final aggressed = action == ActionType.bet;
+    final called = action == ActionType.call;
+
+    // We folded — we lose what we put in. No comment.
+    if (hero.folded) return ImmediateEv(-hero.committed, '');
+
+    // We bet/raised and the villain folded — fold-equity spot, graded by the
+    // card he gave up.
+    if (villain.folded) {
+      final label = !aggressed
+          ? ''
+          : heroCard > villainCard
+              ? 'No Value' // he folded a worse hand — we won nothing extra
+              : heroCard == villainCard
+                  ? 'Split Fold Eq' // he folded the chop
+                  : 'Fold Equity'; // we made a better hand fold
+      return ImmediateEv(villain.committed, label);
+    }
+
+    // Showdown.
+    if (heroCard == villainCard) {
+      return ImmediateEv(0, (aggressed || called) ? 'Split' : '');
+    }
     final matched =
         hero.committed < villain.committed ? hero.committed : villain.committed;
     final ahead = heroCard > villainCard;
-    return ImmediateEv(ahead ? matched : -matched, ahead ? 'WIN' : 'LOSE');
+    final label = aggressed
+        ? (ahead ? 'Value' : 'Called by Better')
+        : called
+            ? (ahead ? 'Showdown Value' : 'Paid Off')
+            : ''; // checked to showdown — no comment
+    return ImmediateEv(ahead ? matched : -matched, label);
   }
 
   // ---- Helpers (shared shape with EvCalculator) ---------------------------
