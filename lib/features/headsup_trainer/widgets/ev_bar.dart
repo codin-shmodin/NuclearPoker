@@ -40,7 +40,7 @@ class EvBar extends StatelessWidget {
         ? null
         : known.fold<int>(0, (sum, c) => sum + c.ev) / known.length;
     return Container(
-      width: 116,
+      width: 150,
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
       decoration: BoxDecoration(
         color: AppColors.background.withValues(alpha: 0.45),
@@ -53,7 +53,7 @@ class EvBar extends StatelessWidget {
             title,
             textAlign: TextAlign.center,
             style: const TextStyle(
-              fontSize: 9.5,
+              fontSize: 10.5,
               fontWeight: FontWeight.w800,
               color: AppColors.textMuted,
               height: 1.15,
@@ -84,7 +84,7 @@ class EvBar extends StatelessWidget {
             Text(
               'Avg ${_signed(average)}',
               style: const TextStyle(
-                fontSize: 9.5,
+                fontSize: 10.5,
                 fontWeight: FontWeight.w700,
                 color: AppColors.textMuted,
               ),
@@ -151,7 +151,7 @@ class _EvRow extends StatelessWidget {
                   child: Text(
                     '?',
                     style: TextStyle(
-                      fontSize: 11,
+                      fontSize: 13,
                       fontWeight: FontWeight.w900,
                       color: AppColors.textMuted,
                     ),
@@ -190,9 +190,9 @@ class _EvRow extends StatelessWidget {
                         overflow: TextOverflow.fade,
                         softWrap: false,
                         style: const TextStyle(
-                          fontSize: 7.5,
+                          fontSize: 9.5,
                           fontWeight: FontWeight.w800,
-                          letterSpacing: 0.2,
+                          letterSpacing: 0.1,
                           color: Colors.white,
                         ),
                       ),
@@ -201,7 +201,7 @@ class _EvRow extends StatelessWidget {
                     Text(
                       _chips(cell.ev),
                       style: const TextStyle(
-                        fontSize: 10,
+                        fontSize: 12,
                         fontWeight: FontWeight.w900,
                         color: Colors.white,
                       ),
@@ -217,12 +217,12 @@ class _EvRow extends StatelessWidget {
   }
 
   Widget _rankLabel(bool active) => SizedBox(
-        width: 16,
+        width: 18,
         child: Text(
           cell.rank.label,
           textAlign: TextAlign.right,
           style: TextStyle(
-            fontSize: 11,
+            fontSize: 12.5,
             fontWeight: FontWeight.w800,
             color: active ? AppColors.textPrimary : AppColors.textMuted,
           ),
