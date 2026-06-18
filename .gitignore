@@ -10,10 +10,15 @@ pubspec.lock
 # Comment these out once you commit real platform config.
 /android/
 /ios/
-/web/
+# /web/ is committed — it holds custom index.html/manifest/icons and is needed for `flutter build web` in CI.
 /macos/
 /windows/
 /linux/
+
+# Firebase
+.firebase/
+firebase-debug.log
+*.log
 
 # IDE
 .idea/
