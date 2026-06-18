@@ -157,4 +157,58 @@ void main() {
     expect(r[12]!.label, ''); // checked to showdown — no teaching label
     expect(r[14], isNull); // villain bets the ace → our decision again, "?"
   });
+
+  // ---- Advanced two-step plans -------------------------------------------
+
+  test(
+      'check-call: bet into our check → we call (showdown); check-back ends it',
+      () {
+    const potsAce = BotProfile(
+      id: 't',
+      name: 't',
+      blurb: 't',
+      nodes: {BetNode.checkedTo: NodeStrategy(betFrom: 14)},
+    );
+    final r = calc(potsAce).evaluateCompound(
+        unraised(), 13, [12, 14], ActionType.check, PlanReply.call);
+    // Queen checks back → showdown after our check; king wins the matched blind.
+    expect(r[12]!.ev, 1);
+    expect(r[12]!.label, ''); // checked to showdown — no comment
+    // Ace bets → we call → showdown and lose: "Paid Off".
+    expect(r[14]!.label, 'Paid Off');
+    expect(r[14]!.ev, lessThan(0));
+  });
+
+  test('raise-fold: villain re-raises our bet → we fold, losing what we put in',
+      () {
+    final r = calc(_raisesAce)
+        .evaluateCompound(unraised(), 10, [14], ActionType.bet, PlanReply.fold);
+    expect(r[14]!.label, ''); // folding gets no label
+    expect(r[14]!.ev, lessThan(0));
+  });
+
+  test('raise-call: villain re-raises → we call → showdown result', () {
+    final r = calc(_raisesAce)
+        .evaluateCompound(unraised(), 10, [14], ActionType.bet, PlanReply.call);
+    // A ten that calls the ace's re-raise loses at showdown — we paid it off.
+    expect(r[14]!.label, 'Paid Off');
+    expect(r[14]!.ev, lessThan(0));
+  });
+
+  test('raise-raise: villain keeps re-raising → ball back to us → "?"', () {
+    const alwaysRaises = BotProfile(
+      id: 't',
+      name: 't',
+      blurb: 't',
+      nodes: {
+        BetNode.facingBet: NodeStrategy(raiseFrom: 2),
+        BetNode.facingRaise: NodeStrategy(raiseFrom: 2),
+        BetNode.facingReraise: NodeStrategy(raiseFrom: 2),
+      },
+    );
+    final r = calc(alwaysRaises).evaluateCompound(
+        unraised(), 10, [14], ActionType.bet, PlanReply.raise);
+    // We bet, he raises, we raise, he raises again → our move again → unknown.
+    expect(r[14], isNull);
+  });
 }

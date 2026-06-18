@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 
+import '../../engine/ev/immediate_ev.dart' show PlanReply;
 import '../../engine/game/action.dart';
 import '../../engine/game/hand_state.dart';
 import '../../engine/game/seat.dart';
@@ -42,7 +43,9 @@ class _HeadsUpScreenState extends State<HeadsUpScreen> {
     final isEnter = event.logicalKey == LogicalKeyboardKey.enter ||
         event.logicalKey == LogicalKeyboardKey.numpadEnter;
     if (event is KeyDownEvent && isEnter && controller.handOver) {
-      controller.sessionOver ? controller.resetSession() : controller.startHand();
+      controller.sessionOver
+          ? controller.resetSession()
+          : controller.startHand();
       return KeyEventResult.handled;
     }
     return KeyEventResult.ignored;
@@ -77,19 +80,26 @@ class _HeadsUpScreenState extends State<HeadsUpScreen> {
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
                             Expanded(child: _Table(controller: controller)),
-                            const SizedBox(width: 8),
-                            RangeBar(
-                              title: controller.rangeTitle,
-                              cells: controller.rangeCells,
-                            ),
-                            if (controller.hintOn) ...[
+                            if (controller.rangeOn) ...[
+                              const SizedBox(width: 8),
+                              RangeBar(
+                                title: controller.rangeTitle,
+                                cells: controller.rangeCells,
+                              ),
+                            ],
+                            if (controller.evOn) ...[
                               const SizedBox(width: 8),
                               EvBar(
-                                title: _evTitle(controller.hoveredAction),
-                                cells: controller.hoveredAction == null
-                                    ? const []
-                                    : controller
-                                        .evCellsForAction(controller.hoveredAction!),
+                                title: controller.hoveredPlan != null
+                                    ? _planEvTitle(controller.hoveredPlan!)
+                                    : _evTitle(controller.hoveredAction),
+                                cells: controller.hoveredPlan != null
+                                    ? controller.evCellsForCompound(
+                                        controller.hoveredPlan!)
+                                    : controller.hoveredAction == null
+                                        ? const []
+                                        : controller.evCellsForAction(
+                                            controller.hoveredAction!),
                               ),
                             ],
                           ],
@@ -123,6 +133,16 @@ String _evTitle(ActionType? action) {
   }
 }
 
+String _planEvTitle(CompoundPlan plan) {
+  final first = plan.first == ActionType.check ? 'check' : 'raise';
+  final second = plan.second == PlanReply.raise
+      ? 'raise'
+      : plan.second == PlanReply.call
+          ? 'call'
+          : 'fold';
+  return 'EV — $first\nthen $second';
+}
+
 class _Table extends StatelessWidget {
   const _Table({required this.controller});
 
@@ -143,8 +163,10 @@ class _Table extends StatelessWidget {
             _SeatRow(
               seat: bot,
               faceUp: controller.revealShowdown && !bot.folded,
-              isActive: state.toAct == HeadsUpController.botSeat && !controller.handOver,
-              isWinner: controller.handOver && state.winners.contains(HeadsUpController.botSeat),
+              isActive: state.toAct == HeadsUpController.botSeat &&
+                  !controller.handOver,
+              isWinner: controller.handOver &&
+                  state.winners.contains(HeadsUpController.botSeat),
               blind: _blindFor(state, HeadsUpController.botSeat),
             ),
             const SizedBox(height: 8),
@@ -156,7 +178,8 @@ class _Table extends StatelessWidget {
               seat: human,
               faceUp: true,
               isActive: controller.isHumanTurn,
-              isWinner: controller.handOver && state.winners.contains(HeadsUpController.humanSeat),
+              isWinner: controller.handOver &&
+                  state.winners.contains(HeadsUpController.humanSeat),
               blind: _blindFor(state, HeadsUpController.humanSeat),
             ),
           ],
@@ -190,7 +213,8 @@ class _DealerButton extends StatelessWidget {
       alignment: Alignment.center,
       decoration: BoxDecoration(
         shape: BoxShape.circle,
-        gradient: const RadialGradient(colors: [Colors.white, Color(0xFFE9E2CF)]),
+        gradient:
+            const RadialGradient(colors: [Colors.white, Color(0xFFE9E2CF)]),
         border: Border.all(color: AppColors.goldDeep, width: 2.5),
         boxShadow: [
           BoxShadow(
@@ -237,7 +261,8 @@ class _SeatRow extends StatelessWidget {
             : Colors.white24;
     return Row(
       children: [
-        PlayingCardWidget(card: seat.card, faceUp: faceUp, width: 50, highlight: isWinner),
+        PlayingCardWidget(
+            card: seat.card, faceUp: faceUp, width: 50, highlight: isWinner),
         const SizedBox(width: 12),
         Container(
           width: 46,
@@ -248,9 +273,11 @@ class _SeatRow extends StatelessWidget {
             gradient: const LinearGradient(
               colors: [AppColors.feltLight, AppColors.feltEdge],
             ),
-            border: Border.all(color: ring, width: isActive || isWinner ? 3 : 1.5),
+            border:
+                Border.all(color: ring, width: isActive || isWinner ? 3 : 1.5),
           ),
-          child: Text(seat.isHuman ? '🙂' : '🤖', style: const TextStyle(fontSize: 22)),
+          child: Text(seat.isHuman ? '🙂' : '🤖',
+              style: const TextStyle(fontSize: 22)),
         ),
         const SizedBox(width: 10),
         Column(
@@ -270,11 +297,13 @@ class _SeatRow extends StatelessWidget {
                 if (blind != null) ...[
                   const SizedBox(width: 6),
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
                     decoration: BoxDecoration(
                       color: AppColors.chipBlue.withValues(alpha: 0.25),
                       borderRadius: BorderRadius.circular(6),
-                      border: Border.all(color: AppColors.chipBlue.withValues(alpha: 0.7)),
+                      border: Border.all(
+                          color: AppColors.chipBlue.withValues(alpha: 0.7)),
                     ),
                     child: Text(
                       blind!,
@@ -302,7 +331,8 @@ class _SeatRow extends StatelessWidget {
         const SizedBox(width: 10),
         if (seat.lastAction != null) _ActionTag(action: seat.lastAction!),
         const Spacer(),
-        if (seat.committed > 0 && !seat.folded) ChipStackWidget(amount: seat.committed),
+        if (seat.committed > 0 && !seat.folded)
+          ChipStackWidget(amount: seat.committed),
       ],
     );
   }
@@ -332,7 +362,10 @@ class _ActionTag extends StatelessWidget {
           color: color,
         ),
       ),
-    ).animate(key: ValueKey('${action.type}_${action.amount}')).fadeIn(duration: 200.ms).scaleXY(begin: 0.7, end: 1);
+    )
+        .animate(key: ValueKey('${action.type}_${action.amount}'))
+        .fadeIn(duration: 200.ms)
+        .scaleXY(begin: 0.7, end: 1);
   }
 
   String _label() {
@@ -394,7 +427,10 @@ class _SpeechBubble extends StatelessWidget {
           ),
         ],
       ),
-    ).animate(key: ValueKey(text)).fadeIn(duration: 250.ms).slideY(begin: -0.15);
+    )
+        .animate(key: ValueKey(text))
+        .fadeIn(duration: 250.ms)
+        .slideY(begin: -0.15);
   }
 }
 
@@ -460,30 +496,73 @@ class _TopBar extends StatelessWidget {
             icon: const Icon(Icons.arrow_back, color: AppColors.textPrimary),
             onPressed: () => Navigator.of(context).maybePop(),
           ),
-          const Text(
-            'Heads-Up Trainer',
-            style: TextStyle(
-              fontSize: 17,
-              fontWeight: FontWeight.w800,
-              color: AppColors.textPrimary,
+          const Flexible(
+            child: Text(
+              'Heads-Up Trainer',
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: 17,
+                fontWeight: FontWeight.w800,
+                color: AppColors.textPrimary,
+              ),
             ),
           ),
           const Spacer(),
-          const Text(
-            '💡 Hint',
-            style: TextStyle(
-              fontSize: 13,
-              fontWeight: FontWeight.w700,
-              color: AppColors.textPrimary,
-            ),
+          _MiniToggle(
+            label: 'EV',
+            value: controller.evOn,
+            onChanged: controller.toggleEv,
           ),
-          Switch(
-            value: controller.hintOn,
-            activeColor: AppColors.potPurple,
-            onChanged: controller.toggleHint,
+          _MiniToggle(
+            label: 'Range',
+            value: controller.rangeOn,
+            onChanged: controller.toggleRange,
+          ),
+          _MiniToggle(
+            label: 'Advanced',
+            value: controller.advancedOn,
+            onChanged: controller.toggleAdvanced,
           ),
         ],
       ),
+    );
+  }
+}
+
+class _MiniToggle extends StatelessWidget {
+  const _MiniToggle({
+    required this.label,
+    required this.value,
+    required this.onChanged,
+  });
+
+  final String label;
+  final bool value;
+  final ValueChanged<bool> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          label,
+          style: const TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.w700,
+            color: AppColors.textPrimary,
+          ),
+        ),
+        Transform.scale(
+          scale: 0.78,
+          child: Switch(
+            value: value,
+            activeThumbColor: AppColors.potPurple,
+            onChanged: onChanged,
+            materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          ),
+        ),
+      ],
     );
   }
 }
@@ -496,12 +575,53 @@ class _BottomPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final view = controller.humanView;
+    final live = !controller.handOver && controller.isHumanTurn && view != null;
+    final buttons = live ? _liveButtons(view) : const <Widget>[];
+    final twoRows = buttons.length > 4;
     return Container(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 18),
-      height: 78,
-      child: controller.handOver ? _endControls() : _actionControls(),
+      height: twoRows ? 132 : 78,
+      child: controller.handOver
+          ? _endControls()
+          : live
+              ? _layout(buttons, twoRows)
+              : _waiting(),
     );
   }
+
+  Widget _waiting() => Center(
+        child: Text(
+          controller.statusMessage,
+          style: const TextStyle(
+            color: AppColors.textMuted,
+            fontSize: 15,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      );
+
+  Widget _layout(List<Widget> buttons, bool twoRows) {
+    if (!twoRows) return _row(buttons);
+    final mid = (buttons.length / 2).ceil();
+    return Column(
+      children: [
+        Expanded(child: _row(buttons.sublist(0, mid))),
+        const SizedBox(height: 8),
+        Expanded(child: _row(buttons.sublist(mid))),
+      ],
+    );
+  }
+
+  Widget _row(List<Widget> buttons) => Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          for (var i = 0; i < buttons.length; i++) ...[
+            if (i > 0) const SizedBox(width: 8),
+            Expanded(child: buttons[i]),
+          ],
+        ],
+      );
 
   Widget _endControls() {
     if (controller.sessionOver) {
@@ -519,75 +639,146 @@ class _BottomPanel extends StatelessWidget {
     );
   }
 
-  Widget _actionControls() {
-    final view = controller.humanView;
-    if (!controller.isHumanTurn || view == null) {
-      return Center(
-        child: Text(
-          controller.statusMessage,
-          style: const TextStyle(
-            color: AppColors.textMuted,
-            fontSize: 15,
-            fontWeight: FontWeight.w600,
-          ),
-        ),
-      );
-    }
-
-    final buttons = <Widget>[
-      if (view.toCall > 0)
-        _ActBtn(
-          label: 'Fold',
-          color: AppColors.danger,
-          onTap: controller.fold,
-          onHover: (h) => controller.setHoveredAction(h ? ActionType.fold : null),
-        ),
-      if (view.canCheck)
-        _ActBtn(
-          label: 'Check',
-          color: AppColors.chipBlue,
-          onTap: controller.check,
-          onHover: (h) => controller.setHoveredAction(h ? ActionType.check : null),
-        ),
-      if (view.canCall)
-        _ActBtn(
-          label: 'Call ${view.toCall}',
-          color: AppColors.chipGreen,
-          onTap: controller.call,
-          onHover: (h) => controller.setHoveredAction(h ? ActionType.call : null),
-        ),
-      if (view.canBet)
-        _ActBtn(
-          label: 'Pot ${view.raiseTarget}',
-          color: AppColors.potPurpleDeep,
-          onTap: controller.pot,
-          onHover: (h) => controller.setHoveredAction(h ? ActionType.bet : null),
-        ),
-    ];
-
-    return Row(
-      children: [
-        for (var i = 0; i < buttons.length; i++) ...[
-          if (i > 0) const SizedBox(width: 10),
-          Expanded(child: buttons[i]),
-        ],
-      ],
-    );
+  /// The action buttons for the player's turn. With the "advanced" toggle on,
+  /// and when we're not last to act, the plain Check/Pot are replaced by
+  /// two-step plans (see [_advancedButtons]).
+  List<Widget> _liveButtons(view) {
+    // On touch there's no hover, so the first tap *arms* an action (revealing
+    // its range/EV info) and a second tap confirms — but only while there's
+    // something to preview (a toggle is on). On desktop, hover arms.
+    final previewOn = controller.evOn || controller.rangeOn;
+    return controller.advancedOn
+        ? _advancedButtons(view, previewOn)
+        : _simpleButtons(view, previewOn);
   }
+
+  List<Widget> _simpleButtons(view, bool previewOn) => [
+        if (view.toCall > 0)
+          _simpleBtn('Fold', AppColors.danger, ActionType.fold, controller.fold,
+              previewOn),
+        if (view.canCheck)
+          _simpleBtn('Check', AppColors.chipBlue, ActionType.check,
+              controller.check, previewOn),
+        if (view.canCall)
+          _simpleBtn('Call ${view.toCall}', AppColors.chipGreen,
+              ActionType.call, controller.call, previewOn),
+        if (view.canBet)
+          _simpleBtn('Pot ${view.raiseTarget}', AppColors.potPurpleDeep,
+              ActionType.bet, controller.pot, previewOn),
+      ];
+
+  /// Two-step plans. First-to-act → the six check/raise plans. Facing a bet →
+  /// Fold / Call / the three raise plans. After the bot checks to us → Check /
+  /// the three raise plans (a check would just end the hand, so check-plans
+  /// don't apply there).
+  List<Widget> _advancedButtons(view, bool previewOn) {
+    final facing = view.toCall > 0;
+    final botChecked =
+        controller.state.seats[HeadsUpController.botSeat].lastAction?.type ==
+            ActionType.check;
+    if (facing) {
+      return [
+        _simpleBtn('Fold', AppColors.danger, ActionType.fold, controller.fold,
+            previewOn,
+            dense: true),
+        _simpleBtn('Call ${view.toCall}', AppColors.chipGreen, ActionType.call,
+            controller.call, previewOn,
+            dense: true),
+        if (view.canBet) ..._raisePlans(previewOn),
+      ];
+    }
+    if (botChecked) {
+      return [
+        _simpleBtn('Check', AppColors.chipBlue, ActionType.check,
+            controller.check, previewOn,
+            dense: true),
+        if (view.canBet) ..._raisePlans(previewOn),
+      ];
+    }
+    return [
+      ..._checkPlans(previewOn),
+      if (view.canBet) ..._raisePlans(previewOn)
+    ];
+  }
+
+  List<Widget> _checkPlans(bool previewOn) => [
+        _planBtn(const CompoundPlan(ActionType.check, PlanReply.raise),
+            'Check ▸ Raise', AppColors.potPurpleDeep, previewOn),
+        _planBtn(const CompoundPlan(ActionType.check, PlanReply.call),
+            'Check ▸ Call', AppColors.chipGreen, previewOn),
+        _planBtn(const CompoundPlan(ActionType.check, PlanReply.fold),
+            'Check ▸ Fold', AppColors.danger, previewOn),
+      ];
+
+  List<Widget> _raisePlans(bool previewOn) => [
+        _planBtn(const CompoundPlan(ActionType.bet, PlanReply.raise),
+            'Raise ▸ Raise', AppColors.potPurpleDeep, previewOn),
+        _planBtn(const CompoundPlan(ActionType.bet, PlanReply.call),
+            'Raise ▸ Call', AppColors.chipGreen, previewOn),
+        _planBtn(const CompoundPlan(ActionType.bet, PlanReply.fold),
+            'Raise ▸ Fold', AppColors.danger, previewOn),
+      ];
+
+  Widget _simpleBtn(String label, Color color, ActionType type,
+          VoidCallback onConfirm, bool previewOn,
+          {bool dense = false}) =>
+      _ActBtn(
+        label: label,
+        color: color,
+        dense: dense,
+        armed: controller.hoveredAction == type,
+        previewOn: previewOn,
+        onConfirm: onConfirm,
+        onHover: (h) => controller.setHoveredAction(h ? type : null),
+      );
+
+  Widget _planBtn(
+          CompoundPlan plan, String label, Color color, bool previewOn) =>
+      _ActBtn(
+        label: label,
+        color: color,
+        dense: true,
+        armed: controller.hoveredPlan == plan,
+        previewOn: previewOn,
+        onConfirm: () => controller.playCompound(plan),
+        onHover: (h) => controller.setHoveredPlan(h ? plan : null),
+      );
 }
 
 class _ActBtn extends StatelessWidget {
   const _ActBtn({
     required this.label,
     required this.color,
-    required this.onTap,
+    required this.onConfirm,
     this.onHover,
+    this.armed = false,
+    this.previewOn = false,
+    this.dense = false,
   });
 
   final String label;
   final Color color;
-  final VoidCallback onTap;
+  final VoidCallback onConfirm;
   final ValueChanged<bool>? onHover;
+
+  /// This action is currently previewed (hovered, or armed by a first tap).
+  final bool armed;
+
+  /// There's info to preview (a toggle is on), so the first tap arms instead of
+  /// acting immediately.
+  final bool previewOn;
+
+  /// Compact sizing — used for the advanced (two-step) buttons, where up to six
+  /// share the action bar.
+  final bool dense;
+
+  void _handleTap() {
+    if (previewOn && !armed) {
+      onHover?.call(true); // first tap: arm + reveal this action's info
+    } else {
+      onConfirm(); // second tap (or nothing to preview): commit
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -595,22 +786,58 @@ class _ActBtn extends StatelessWidget {
       onEnter: (_) => onHover?.call(true),
       onExit: (_) => onHover?.call(false),
       child: FilledButton(
-        onPressed: onTap,
+        onPressed: _handleTap,
         style: FilledButton.styleFrom(
           backgroundColor: color,
           foregroundColor: Colors.white,
-          padding: const EdgeInsets.symmetric(vertical: 16),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-          textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
+          padding: EdgeInsets.symmetric(
+              vertical: dense ? 6 : 12, horizontal: dense ? 4 : 12),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(14),
+            side: armed
+                ? const BorderSide(color: Colors.white, width: 3)
+                : BorderSide.none,
+          ),
+          textStyle:
+              TextStyle(fontSize: dense ? 12 : 16, fontWeight: FontWeight.w800),
         ),
-        child: Text(label),
+        child: armed
+            ? Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    label,
+                    textAlign: TextAlign.center,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(fontSize: dense ? 11 : 14, height: 1.1),
+                  ),
+                  SizedBox(height: dense ? 1 : 2),
+                  Text(
+                    dense ? 'CONFIRM' : 'TAP TO CONFIRM',
+                    style: TextStyle(
+                      fontSize: dense ? 8 : 9,
+                      letterSpacing: 0.5,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+              )
+            : Text(
+                label,
+                textAlign: TextAlign.center,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
       ),
     );
   }
 }
 
 class _FullButton extends StatelessWidget {
-  const _FullButton({required this.label, required this.color, required this.onTap});
+  const _FullButton(
+      {required this.label, required this.color, required this.onTap});
 
   final String label;
   final Color color;
@@ -625,10 +852,12 @@ class _FullButton extends StatelessWidget {
             style: FilledButton.styleFrom(
               backgroundColor: color,
               padding: const EdgeInsets.symmetric(vertical: 16),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(14)),
             ),
             onPressed: onTap,
-            child: Text(label, style: const TextStyle(fontWeight: FontWeight.w800)),
+            child: Text(label,
+                style: const TextStyle(fontWeight: FontWeight.w800)),
           ),
         ),
       ],

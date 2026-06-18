@@ -38,9 +38,14 @@ anti-exploitability now lives in each profile's explicit bottom `bluffs`.)
 ## 4. Range narrowing + the range bar
 - The bot's possible holdings start as the whole deck (2→A) and **narrow with each action** (e.g. it
   pots → range becomes 9→A; it checks → 2→8).
-- **Range bar** (vertical, A top → 2 bottom): in-range ranks are coloured by the bot's action for
-  that rank — **CHECK / FOLD / CALL / POT** (POT is purple). When it's your turn it colours by "what
-  the bot does **if you pot**". Out-of-range ranks are dimmed.
+- **Range bar** (vertical, A top → 2 bottom, **toggleable** via the "Range" switch): in-range ranks
+  are coloured by the bot's action for that rank — **CHECK / FOLD / CALL / POT / ALL-IN**. POT is
+  purple; **ALL-IN is a deeper purple** (a pot bet/raise that commits the whole stack — practically a
+  pot, but distinct). When it's your turn it colours by "what the bot does **if you pot**". Out-of-range
+  ranks are dimmed.
+- The bar shows **only the range and the bot's action — never a win/lose/split matchup**. When you're
+  last to act (a call or a check that just ends in a showdown) the cards are neutral grey: the bar
+  isn't a results preview.
 - At hand end the bar shows the bot's **final range neutrally** (title "Villain's range") and outlines
   its **actual card**. (Coloring is *not* recomputed here — doing so re-applied the defense floor to a
   narrowed fold-range and invented a fake call region; fixed.)
@@ -48,7 +53,7 @@ anti-exploitability now lives in each profile's explicit bottom `bluffs`.)
   king, and fold a nine.").
 
 ## 5. The EV hint (free toggle, hover-driven)
-With the **Hint** switch on, **hovering an action button** (Fold / Check / Call / Pot) reveals the
+With the **EV** switch on (formerly "Hint"), **hovering an action button** (Fold / Check / Call / Pot) reveals the
 **Immediate EV** bar for *that* action: for each card the bot might hold, the **option-A** value —
 *the chips you end the hand with minus your stack at the start of the hand* — for the lines that
 **resolve the moment the bot answers**. Color-graded bright-red → grey → bright-green, scaled to the
@@ -78,6 +83,10 @@ reply × who's ahead — not just the raw outcome:
 Long labels fade in the narrow cell but show in full on hover (tooltip). Check and fold lines
 show only the chip number — there's nothing strategic to teach about checking through or folding.
 
+**EV with the range bar off.** Turning "Range" off removes the range bar entirely. The EV bar then
+shows a **number wherever it's computable** and a **"?"** when the card **isn't in his range** *or*
+the ball comes back to you (he raises) — so a bare "?" no longer reveals the boundary of his range.
+
 **The "?" — the deliberate gap.** We give a number only for lines that finish on the bot's next
 action. The one case that *doesn't* is **you aggress and the bot re-raises** (or **you check and the
 bot bets**): the ball is back in your court, the result depends on a move you haven't made, and we
@@ -94,9 +103,33 @@ In that spot we hide it: there's no honest average to show.
 > still exists as a solver but is **not** shown to the player — deliberately, so the trainer makes you
 > think rather than handing you the answer.
 
+## 5b. Advanced actions (two-step plans)
+The **Advanced** switch replaces, when you're **not last to act**, the plain Check/Pot with **two-step
+plans** — your first move plus the reply you commit to if the bot puts the ball back:
+- First to act: **check-raise / check-call / check-fold / raise-raise / raise-call / raise-fold**.
+- Facing a bet: **Fold / Call / raise-raise / raise-call / raise-fold**.
+- After the bot checks to you: **Check / raise-raise / raise-call / raise-fold** (a check would just
+  end the hand, so check-plans don't apply).
+
+Pressing one **plays the line out** move-by-move at a watchable pace, stopping early when the bot's
+reply doesn't trigger your second action (e.g. check-call but he checks back → ends at showdown), or
+when the bot **raises your second raise** — then the ball is genuinely back with you and the normal
+buttons return.
+
+- **Range bar on a plan hover:** each card is coloured by the bot's reply to your *first* action. Only
+  for **raise-raise / check-raise** do the cards that actually reach your second raise **split**:
+  left = your raise (purple) │ right = his reply to it, divided by a line.
+- **EV bar on a plan hover:** the net chips at the **end of the played-out line** per card — or **"?"**
+  only when it ends with the bot raising *again* after your second raise.
+
+`evaluateCompound` in `engine/ev/immediate_ev.dart` plays the scripted line per card; covered in
+`test/immediate_ev_test.dart`.
+
 ## 6. UI specifics
+- **Toggles (top bar):** **EV** · **Range** · **Advanced** (compact switches).
 - **Action buttons:** Fold / Check / Call N / **Pot N** (only the legal ones each spot; Pot shows the
-  raise-to amount, in purple).
+  raise-to amount, in purple). With **Advanced** on, the two-step plans above (up to six, laid out in
+  two rows).
 - **Dealer button:** a chip that **animates between the two seats** each hand (`AnimatedAlign`);
   seats also show SB/BB badges.
 - **Last action** is shown as a bold colour-coded tag by each player (POT N / CALL N / CHECK / FOLD).

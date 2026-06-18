@@ -36,4 +36,7 @@ abstract class AppColors {
   /// Aggressive action (bet/raise = "pot").
   static const Color potPurple = Color(0xFF9B5CF6);
   static const Color potPurpleDeep = Color(0xFF7C3AED);
+
+  /// All-in — practically a pot bet, but distinct: a deeper, darker purple.
+  static const Color allInPurple = Color(0xFF4C1D95);
 }

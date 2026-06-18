@@ -7,6 +7,10 @@ import '../game/hand_state.dart';
 import '../players/bot_profile.dart';
 import '../players/range_bot.dart' show BotMove;
 
+/// Hero's planned reply in a two-step "advanced" line, taken when the villain
+/// puts the ball back to hero (bets into hero's check, or raises hero's bet).
+enum PlanReply { raise, call, fold }
+
 /// One villain card's immediate result for a hero action — **option A**: the
 /// chips hero ends the hand with minus hero's stack at the start of the hand
 /// (i.e. net profit), for every line that *resolves the moment the villain
@@ -68,17 +72,77 @@ class ImmediateEvCalculator {
     };
   }
 
+  /// Hero plays a two-step "advanced" line: a [first] action (check or bet), and
+  /// — if the villain puts the ball back to hero (bets into a check, or raises a
+  /// bet) — a planned [second] reply. Returns the net result at the end of the
+  /// played-out line per villain card, or `null` ("?") when the line ends with
+  /// the villain raising *again* after hero's second raise (ball back to hero,
+  /// only reachable for raise-raise / check-raise).
+  Map<int, ImmediateEv?> evaluateCompound(
+    HandState state,
+    int heroCard,
+    List<int> belief,
+    ActionType first,
+    PlanReply second,
+  ) {
+    return {
+      for (final b in belief)
+        b: _forCompound(state, heroCard, b, first, second),
+    };
+  }
+
+  ImmediateEv? _forCompound(HandState state, int heroCard, int villainCard,
+      ActionType first, PlanReply second) {
+    final s = state.clone();
+    _setCards(s, heroCard, villainCard);
+
+    var lastHeroAction = first;
+    engine.applyAction(s, GameAction(first));
+    _villainAnswers(s, villainCard);
+
+    // Villain put the ball back to hero → play hero's planned second action.
+    if (s.phase == HandPhase.betting && s.toAct == heroSeat) {
+      final act = _secondAction(s, second);
+      lastHeroAction = act.type;
+      engine.applyAction(s, act);
+      _villainAnswers(s, villainCard);
+      // Villain raised hero's second raise → ball back again, we don't model it.
+      if (s.phase == HandPhase.betting && s.toAct == heroSeat) return null;
+    }
+
+    return _terminal(s, heroCard, villainCard, lastHeroAction);
+  }
+
+  /// The villain plays its single transparent reply, if it's its turn.
+  void _villainAnswers(HandState s, int villainCard) {
+    if (s.phase == HandPhase.betting && s.toAct == botSeat) {
+      final move = profile.moveAt(_nodeFor(s, botSeat), villainCard);
+      engine.applyAction(s, _villainAction(s, botSeat, move));
+    }
+  }
+
+  /// Hero's planned second action, degraded to what's legal at the node.
+  GameAction _secondAction(HandState s, PlanReply reply) {
+    final seat = s.seats[heroSeat];
+    final toCall = s.currentBet - seat.committed;
+    final canBet = seat.stack > toCall;
+    switch (reply) {
+      case PlanReply.raise:
+        if (canBet) return const GameAction.bet(0);
+        return toCall > 0 ? const GameAction.call(0) : const GameAction.check();
+      case PlanReply.call:
+        return toCall > 0 ? const GameAction.call(0) : const GameAction.check();
+      case PlanReply.fold:
+        return toCall > 0 ? const GameAction.fold() : const GameAction.check();
+    }
+  }
+
   ImmediateEv? _forCard(
       HandState state, int heroCard, int villainCard, ActionType action) {
     final s = state.clone();
     _setCards(s, heroCard, villainCard);
     engine.applyAction(s, GameAction(action));
-
-    // The villain answers once, if it's its turn.
-    if (s.phase == HandPhase.betting && s.toAct == botSeat) {
-      final move = profile.moveAt(_nodeFor(s, botSeat), villainCard);
-      engine.applyAction(s, _villainAction(s, botSeat, move));
-    }
+    _villainAnswers(s, villainCard);
 
     // Ball back in hero's court → unknown; we don't model hero's next move.
     if (s.phase == HandPhase.betting && s.toAct == heroSeat) return null;

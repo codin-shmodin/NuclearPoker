@@ -16,6 +16,8 @@ class RangeBar extends StatelessWidget {
     switch (b) {
       case RangeBucket.pot:
         return AppColors.potPurple;
+      case RangeBucket.allIn:
+        return AppColors.allInPurple;
       case RangeBucket.call:
         return AppColors.chipGreen;
       case RangeBucket.fold:
@@ -24,12 +26,6 @@ class RangeBar extends StatelessWidget {
         return AppColors.chipBlue;
       case RangeBucket.shown:
         return const Color(0xFF5B6470); // neutral grey — "cards he can have"
-      case RangeBucket.win:
-        return AppColors.chipGreen;
-      case RangeBucket.lose:
-        return AppColors.danger;
-      case RangeBucket.tie:
-        return AppColors.chipBlue;
     }
   }
 
@@ -37,6 +33,8 @@ class RangeBar extends StatelessWidget {
     switch (b) {
       case RangeBucket.pot:
         return 'POT';
+      case RangeBucket.allIn:
+        return 'ALL-IN';
       case RangeBucket.call:
         return 'CALL';
       case RangeBucket.fold:
@@ -45,12 +43,6 @@ class RangeBar extends StatelessWidget {
         return 'CHECK';
       case RangeBucket.shown:
         return 'RANGE';
-      case RangeBucket.win:
-        return 'WIN';
-      case RangeBucket.lose:
-        return 'LOSE';
-      case RangeBucket.tie:
-        return 'SPLIT';
     }
   }
 
@@ -86,8 +78,7 @@ class RangeBar extends StatelessWidget {
           Expanded(
             child: Column(
               children: [
-                for (final cell in cells)
-                  Expanded(child: _RankRow(cell: cell)),
+                for (final cell in cells) Expanded(child: _RankRow(cell: cell)),
               ],
             ),
           ),
@@ -126,7 +117,8 @@ class _RankRow extends StatelessWidget {
               style: TextStyle(
                 fontSize: 11,
                 fontWeight: FontWeight.w800,
-                color: cell.inRange ? AppColors.textPrimary : AppColors.textMuted,
+                color:
+                    cell.inRange ? AppColors.textPrimary : AppColors.textMuted,
               ),
             ),
           ),
@@ -135,14 +127,38 @@ class _RankRow extends StatelessWidget {
             child: AnimatedContainer(
               duration: const Duration(milliseconds: 300),
               decoration: BoxDecoration(
-                color: cell.inRange
-                    ? color.withValues(alpha: 0.92)
-                    : Colors.white.withValues(alpha: 0.05),
+                color: !cell.inRange
+                    ? Colors.white.withValues(alpha: 0.05)
+                    : cell.splitRight == null
+                        ? color.withValues(alpha: 0.92)
+                        : null,
                 borderRadius: BorderRadius.circular(3),
                 border: cell.isBotCard
                     ? Border.all(color: Colors.white, width: 2)
                     : null,
               ),
+              // Split cell: left = our raise (purple) │ right = his reply to it.
+              child: cell.splitRight == null
+                  ? null
+                  : ClipRRect(
+                      borderRadius: BorderRadius.circular(3),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Expanded(
+                            child: ColoredBox(
+                                color: color.withValues(alpha: 0.92)),
+                          ),
+                          Container(width: 1.5, color: Colors.white),
+                          Expanded(
+                            child: ColoredBox(
+                              color: RangeBar.colorFor(cell.splitRight!)
+                                  .withValues(alpha: 0.92),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
             ),
           ),
         ],
