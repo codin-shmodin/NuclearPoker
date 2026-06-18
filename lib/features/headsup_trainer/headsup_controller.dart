@@ -3,24 +3,33 @@ import 'dart:math';
 import 'package:flutter/foundation.dart';
 
 import '../../engine/cards/rank.dart';
+import '../../engine/ev/immediate_ev.dart';
 import '../../engine/game/action.dart';
 import '../../engine/game/game_view.dart';
 import '../../engine/game/hand_engine.dart';
 import '../../engine/game/hand_state.dart';
 import '../../engine/game/rule_config.dart';
 import '../../engine/game/seat.dart';
-import '../../engine/players/range_bot.dart';
+import '../../engine/players/bot_profile.dart';
+import '../../engine/players/range_bot.dart' show BotMove;
 
-/// How a rank is coloured on the range bar.
-enum RangeBucket { check, fold, call, pot, shown }
+/// How a rank is coloured on the range bar. `check/fold/call/pot` are the bot's
+/// *action* with that card; `win/lose/tie` are the showdown matchup vs your card
+/// (used when the action you're hovering just ends in a showdown); `shown` is
+/// the neutral grey "cards he can have".
+enum RangeBucket { check, fold, call, pot, shown, win, lose, tie }
 
-/// A row on the EV hint bar: the exact chip EV of potting vs this holding.
+/// A row on the EV hint bar: the immediate (option-A) chip result of one action
+/// vs the bot holding a particular card — net chips from the start of the hand,
+/// for the lines that resolve the moment the bot answers.
 class EvCell {
-  const EvCell(this.rank, this.active, this.chips, this.color, this.label);
+  const EvCell(this.rank, this.active, this.unknown, this.ev, this.color,
+      this.label);
 
   final Rank rank;
-  final bool active; // bot could hold this AND we have a live pot decision
-  final int chips; // exact EV of potting (vs checking down), in chips
+  final bool active; // bot could hold this AND we have a live decision
+  final bool unknown; // the ball comes back to us → shown as "?"
+  final int ev; // net chips from the start of the hand (signed)
   final double color; // -1 (lose a lot) .. +1 (win a lot) for the gradient
   final String label;
 }
@@ -35,16 +44,20 @@ class RankCell {
   final bool isBotCard; // revealed at showdown
 }
 
-/// Drives the heads-up trainer: the human (big blind) defends against a fully
-/// transparent [RangeBot] (button). The bot narrates its range and the bar shows
-/// exactly what it will do, so the player learns to respond.
+/// Drives the heads-up trainer: the human defends against a fully transparent
+/// [BotProfile]. Play, the narration, the range bar and the EV hint all read
+/// the *same* profile, so what the bar predicts is exactly what the bot does.
 class HeadsUpController extends ChangeNotifier {
-  HeadsUpController({int? seed}) : _rng = seed == null ? Random() : Random(seed) {
+  HeadsUpController({BotProfile? profile, int? seed})
+      : profile = profile ?? BotProfile.pro,
+        _rng = seed == null ? Random() : Random(seed) {
     seats = [
       Seat(index: 0, playerId: 'human', name: 'You', isHuman: true, stack: rules.startingStack),
-      Seat(index: 1, playerId: _bot.id, name: _bot.name, isHuman: false, stack: rules.startingStack),
+      Seat(index: 1, playerId: this.profile.id, name: this.profile.name, isHuman: false, stack: rules.startingStack),
     ];
     _engine = HandEngine(rules, _rng);
+    _ev = ImmediateEvCalculator(_engine, this.profile,
+        heroSeat: humanSeat, botSeat: botSeat);
     startHand();
   }
 
@@ -60,15 +73,20 @@ class HeadsUpController extends ChangeNotifier {
   static const Duration _botThink = Duration(milliseconds: 850);
   static const Duration _revealDelay = Duration(milliseconds: 850);
 
+  final BotProfile profile;
   final Random _rng;
-  final RangeBot _bot = RangeBot();
   late final HandEngine _engine;
+  late final ImmediateEvCalculator _ev;
   late final List<Seat> seats;
   late HandState state;
 
   bool busy = false;
   bool revealShowdown = false;
   bool hintOn = false;
+
+  /// The action the player is hovering, if any — drives which action's EV the
+  /// hint bar shows.
+  ActionType? hoveredAction;
 
   // The dealer/button alternates each hand (starts on the bot).
   int _button = humanSeat;
@@ -80,10 +98,16 @@ class HeadsUpController extends ChangeNotifier {
     notifyListeners();
   }
 
+  void setHoveredAction(ActionType? action) {
+    if (hoveredAction == action) return;
+    hoveredAction = action;
+    _rebuildRange(); // the range bar lights up for the hovered action
+    notifyListeners();
+  }
+
   // ---- Range / narration state (for the UI) ------------------------------
   final Set<int> _botRange = {}; // rank values the bot could still hold
   List<RankCell> rangeCells = [];
-  List<EvCell> evCells = [];
   String rangeTitle = '';
   String botSpeech = '';
   String statusMessage = '';
@@ -106,6 +130,7 @@ class HeadsUpController extends ChangeNotifier {
   // ---- Hand lifecycle -----------------------------------------------------
   void startHand() {
     revealShowdown = false;
+    hoveredAction = null;
     _button = (_button + 1) % 2; // switch positions each hand
     _botRange
       ..clear()
@@ -136,6 +161,7 @@ class HeadsUpController extends ChangeNotifier {
 
   void _humanAct(GameAction action) {
     if (!isHumanTurn) return;
+    hoveredAction = null;
     _engine.applyAction(state, action);
     _rebuildRange();
     notifyListeners();
@@ -152,9 +178,9 @@ class HeadsUpController extends ChangeNotifier {
       if (state.phase != HandPhase.betting || state.toAct != botSeat) break;
 
       final view = _engine.buildView(state, botSeat);
-      final facing = view.toCall > 0;
-      final move = _botMove(view.myCard.rank.value, facing: facing);
-      _narrowByMove(facing, move); // the action reveals info about its range
+      final node = _botNode();
+      final move = profile.moveAt(node, view.myCard.rank.value);
+      _narrowByMove(node, move); // the action reveals info about its range
       _engine.applyAction(state, _moveAction(move, view));
       _rebuildRange();
       notifyListeners();
@@ -171,28 +197,26 @@ class HeadsUpController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// The bot's move for [rankValue], range-aware. First in: pot a nine+, else
-  /// check. Facing a raise: the usual fold/call/pot by absolute strength, BUT it
-  /// always defends (at least calls) the top of its *current* range so it can't
-  /// be exploited for a 100% fold (e.g. after it checks a weak range).
-  BotMove _botMove(int rankValue, {required bool facing}) {
-    if (!facing) {
-      return rankValue >= RangeBot.openPotFrom ? BotMove.pot : BotMove.check;
-    }
-    BotMove move;
-    if (rankValue >= RangeBot.facingPotFrom) {
-      move = BotMove.pot;
-    } else if (rankValue >= RangeBot.facingCallFrom) {
-      move = BotMove.call;
-    } else {
-      move = BotMove.fold;
-    }
-    // Floor: never fold 100% — always defend (call) the single top of the
-    // current range, even if it's below the normal calling threshold.
-    if (move == BotMove.fold && _botRange.isNotEmpty) {
-      if (rankValue == _botRange.reduce(max)) move = BotMove.call;
-    }
-    return move;
+  /// The betting node the bot is currently at (or would face).
+  BetNode _botNode() => _nodeForSeat(botSeat);
+
+  /// The node the bot would be at if the human bets/raises (pots) right now.
+  BetNode _botNodeIfHumanPots() => _facingNode(state.raiseCount + 1);
+
+  BetNode _nodeForSeat(int seatIndex) {
+    final seat = state.seats[seatIndex];
+    final toCall = state.currentBet - seat.committed;
+    if (toCall > 0) return _facingNode(state.raiseCount);
+    final other = state.seats[seatIndex == botSeat ? humanSeat : botSeat];
+    return other.lastAction?.type == ActionType.check
+        ? BetNode.checkedTo
+        : BetNode.open;
+  }
+
+  BetNode _facingNode(int raiseCount) {
+    if (raiseCount <= 1) return BetNode.facingBet;
+    if (raiseCount == 2) return BetNode.facingRaise;
+    return BetNode.facingReraise;
   }
 
   GameAction _moveAction(BotMove move, GameView view) {
@@ -209,23 +233,15 @@ class HeadsUpController extends ChangeNotifier {
     }
   }
 
-  /// Keep only the ranks for which the bot would make [move] at this node.
-  /// Classify first (against the current range) so narrowing is consistent.
-  void _narrowByMove(bool facing, BotMove move) {
-    final classified = {
-      for (final v in _botRange) v: _botMove(v, facing: facing),
-    };
-    _botRange.removeWhere((v) => classified[v] != move);
+  /// Keep only the ranks for which the bot would make [move] at [node].
+  void _narrowByMove(BetNode node, BotMove move) {
+    _botRange.removeWhere((v) => profile.moveAt(node, v) != move);
   }
 
   // ---- Range view + narration --------------------------------------------
   void _rebuildRange() {
-    evCells = _buildEvCells();
-
     if (state.phase == HandPhase.complete) {
       _statusComplete();
-      // Hand over: show the bot's FINAL range neutrally (no action recolouring)
-      // and highlight its actual card. Re-colouring here caused a stale-floor bug.
       rangeTitle = "Villain's range";
       botSpeech = revealShowdown ? _resultSpeech() : '';
       rangeCells = _cells(
@@ -236,44 +252,103 @@ class HeadsUpController extends ChangeNotifier {
     }
 
     if (state.toAct == botSeat) {
-      final view = _engine.buildView(state, botSeat);
-      final facing = view.toCall > 0;
-      final botIsButton = state.button == botSeat;
+      final node = _botNode();
+      final facing = node != BetNode.open && node != BetNode.checkedTo;
       rangeTitle = facing ? 'Facing your raise I would:' : 'My range';
-      if (facing) {
-        botSpeech = 'You raised — let me see…';
-      } else if (botIsButton) {
-        botSpeech = "I'm on the button. I pot a nine or better, otherwise I check.";
-      } else {
-        botSpeech = "You checked to me — I pot a nine or better, else check back.";
-      }
-      rangeCells = _cells(facing: facing);
-      statusMessage = '${_bot.name} is thinking…';
+      botSpeech = facing ? _botFacingSpeech(node) : _botOpenSpeech(node);
+      rangeCells = _cells(node: node);
+      statusMessage = '${profile.name} is thinking…';
       return;
     }
 
-    // Human to act: show what the bot will do if we pot.
-    rangeTitle = 'If you POT, ${_bot.name} will:';
-    botSpeech = _facingSpeech();
-    rangeCells = _cells(facing: true);
+    // Human to act: the range bar reflects the action you're hovering.
     statusMessage = 'Your move.';
+    final action = hoveredAction;
+
+    // Nothing hovered, or folding → just show the cards he can have, in grey.
+    if (action == null || action == ActionType.fold) {
+      rangeTitle = "${profile.name}'s range";
+      botSpeech = 'Hover an option to see how I react.';
+      rangeCells = _cells(neutral: true);
+      return;
+    }
+
+    // Betting → colour by his response to the bet/raise.
+    if (action == ActionType.bet) {
+      final node = _botNodeIfHumanPots();
+      rangeTitle = 'If you POT, ${profile.name} will:';
+      botSpeech = _facingSpeech(node);
+      rangeCells = _cells(node: node);
+      return;
+    }
+
+    // Checking when the bot still gets to act → colour by his check/bet choice.
+    if (action == ActionType.check && !seats[botSeat].hasActed) {
+      rangeTitle = 'If you check, ${profile.name} will:';
+      botSpeech = _botOpenSpeech(BetNode.checkedTo);
+      rangeCells = _cells(node: BetNode.checkedTo);
+      return;
+    }
+
+    // Call, or a check that ends the hand → it's a showdown, so colour his
+    // range by how you fare against each card.
+    rangeTitle = action == ActionType.call ? 'If you CALL:' : 'At showdown:';
+    botSpeech = _matchupSpeech();
+    rangeCells = _cellsMatchup();
   }
 
-  List<RankCell> _cells({bool facing = false, bool neutral = false, int? highlight}) {
+  /// Colour each in-range card by the showdown result against our card.
+  List<RankCell> _cellsMatchup() {
+    final h = seats[humanSeat].card?.rank.value ?? 0;
+    return [
+      for (final r in Rank.values.reversed)
+        RankCell(
+          r,
+          _botRange.contains(r.value),
+          h > r.value
+              ? RangeBucket.win
+              : (h < r.value ? RangeBucket.lose : RangeBucket.tie),
+          false,
+        ),
+    ];
+  }
+
+  String _matchupSpeech() {
+    final h = seats[humanSeat].card?.rank.value;
+    if (h == null) return '';
+    final inRange = _botRange.toList()..sort();
+    final beat = <int>[], lose = <int>[], tie = <int>[];
+    for (final v in inRange) {
+      if (h > v) {
+        beat.add(v);
+      } else if (h < v) {
+        lose.add(v);
+      } else {
+        tie.add(v);
+      }
+    }
+    final parts = <String>[];
+    if (beat.isNotEmpty) parts.add('beat ${_group(beat)}');
+    if (lose.isNotEmpty) parts.add('lose to ${_group(lose)}');
+    if (tie.isNotEmpty) parts.add('tie ${_group(tie)}');
+    return parts.isEmpty ? '…' : 'You ${_join(parts)}.';
+  }
+
+  List<RankCell> _cells({BetNode? node, bool neutral = false, int? highlight}) {
     final ranks = Rank.values.reversed.toList(); // A (top) → 2 (bottom)
     return [
       for (final r in ranks)
         RankCell(
           r,
           _botRange.contains(r.value),
-          neutral ? RangeBucket.shown : _bucketFor(r.value, facing),
+          neutral ? RangeBucket.shown : _bucketFor(r.value, node!),
           highlight != null && r.value == highlight,
         ),
     ];
   }
 
-  RangeBucket _bucketFor(int v, bool facing) {
-    switch (_botMove(v, facing: facing)) {
+  RangeBucket _bucketFor(int v, BetNode node) {
+    switch (profile.moveAt(node, v)) {
       case BotMove.pot:
         return RangeBucket.pot;
       case BotMove.call:
@@ -286,91 +361,73 @@ class HeadsUpController extends ChangeNotifier {
   }
 
   // ---- EV hint ------------------------------------------------------------
-  List<EvCell> _buildEvCells() {
+
+  /// The immediate-EV cells for [action] — one row per rank the bot might hold,
+  /// each the option-A net result (end-of-hand chips minus our starting stack)
+  /// of the lines that resolve when the bot answers. A rank is `unknown` ("?")
+  /// when this action hands the decision back to us. Inactive when it isn't a
+  /// live decision or the action is illegal here.
+  List<EvCell> evCellsForAction(ActionType action) {
+    final ranks = Rank.values.reversed.toList();
     final h = seats[humanSeat].card?.rank.value;
     final view = humanView;
-    final active = h != null && view != null && view.canBet && isHumanTurn;
-    final ranks = Rank.values.reversed.toList();
-    if (!active) {
-      return [for (final r in ranks) EvCell(r, false, 0, 0, '')];
+    if (h == null || view == null || !isHumanTurn || !_isLegal(action, view)) {
+      return [for (final r in ranks) EvCell(r, false, false, 0, 0, '')];
     }
-    return [for (final r in ranks) _evFor(r, h)];
+    final belief = _botRange.toList();
+    final results = _ev.evaluate(state, h, belief, action);
+
+    // Scale the colour gradient by the biggest swing on the bar, so the brightest
+    // red/green always mark this action's worst/best card.
+    var maxAbs = 1;
+    for (final r in results.values) {
+      if (r != null && r.ev.abs() > maxAbs) maxAbs = r.ev.abs();
+    }
+
+    return [
+      for (final r in ranks)
+        if (!_botRange.contains(r.value))
+          EvCell(r, false, false, 0, 0, '')
+        else
+          _toCell(r, results[r.value], maxAbs),
+    ];
   }
 
-  /// Exact EV (in chips) of potting vs the bot holding [r], compared to checking
-  /// it down — given our card [h].
-  EvCell _evFor(Rank r, int h) {
-    final b = r.value;
-    if (!_botRange.contains(b)) return EvCell(r, false, 0, 0, '');
-
-    final chips = _potNet(h, b) - _checkdownNet(h, b);
-    final color = (chips / (state.pot > 0 ? state.pot : 1)).clamp(-1.0, 1.0);
-
-    final resp = _botMove(b, facing: true);
-    final String label;
-    if (resp == BotMove.fold) {
-      // He folds. Folding a worse hand = no value; folding a hand that ties or
-      // beats us = fold equity (we win instead of splitting/losing).
-      label = h > b ? 'NO VAL' : 'FOLD EQ';
-    } else if (h == b) {
-      label = 'SPLIT';
-    } else {
-      label = h > b ? 'VALUE' : 'BEAT';
-    }
-    return EvCell(r, true, chips, color, label);
+  EvCell _toCell(Rank r, ImmediateEv? result, int maxAbs) {
+    if (result == null) return EvCell(r, true, true, 0, 0, '?');
+    final color = (result.ev / maxAbs).clamp(-1.0, 1.0);
+    return EvCell(r, true, false, result.ev, color, result.label);
   }
 
-  /// Net chips (from start of hand) if we POT and the line resolves: bot folds →
-  /// we take the pot; bot calls → showdown; bot shoves → we take our better of
-  /// fold/call. Uses the real pot-sized math.
-  int _potNet(int h, int b) {
-    final me = seats[humanSeat];
-    final bot = seats[botSeat];
-    final p = state.pot;
-    final cb = state.currentBet;
-    final myCall = cb - me.committed > 0 ? cb - me.committed : 0;
-    final ourTarget = _min(cb + p + myCall, me.committed + me.stack);
-    final ourAdd = ourTarget - me.committed;
-
-    final resp = _botMove(b, facing: true);
-    if (resp == BotMove.fold) {
-      return p - me.committed; // win the existing pot; our raise comes back
+  bool _isLegal(ActionType action, GameView view) {
+    switch (action) {
+      case ActionType.fold:
+        return view.toCall > 0;
+      case ActionType.check:
+        return view.canCheck;
+      case ActionType.call:
+        return view.canCall;
+      case ActionType.bet:
+        return view.canBet;
     }
-    if (resp == BotMove.call) {
-      final botCall = _min(ourTarget - bot.committed, bot.stack);
-      return _showdownNet(h, b, me.committed + ourAdd, bot.committed + botCall);
-    }
-    // Bot shoves (pot-raise). We pick the better of folding or calling.
-    final pot1 = p + ourAdd;
-    final botCall = ourTarget - bot.committed > 0 ? ourTarget - bot.committed : 0;
-    final botTarget = _min(ourTarget + pot1 + botCall, bot.committed + bot.stack);
-    final foldNet = -(me.committed + ourAdd);
-    final ourFinal = _min(botTarget, me.committed + me.stack);
-    final callNet = _showdownNet(h, b, ourFinal, botTarget);
-    return foldNet > callNet ? foldNet : callNet;
   }
-
-  /// Net chips if instead we just check/call down to showdown right now.
-  int _checkdownNet(int h, int b) =>
-      _showdownNet(h, b, state.currentBet, seats[botSeat].committed);
-
-  /// Net chips at showdown given each side's total invested (uncalled returns).
-  int _showdownNet(int h, int b, int myInv, int botInv) {
-    final matched = myInv < botInv ? myInv : botInv;
-    if (h > b) return matched;
-    if (h < b) return -matched;
-    return 0;
-  }
-
-  int _min(int a, int b) => a < b ? a : b;
 
   // ---- Speech helpers -----------------------------------------------------
-  String _facingSpeech() {
+  String _botOpenSpeech(BetNode node) {
+    final betFrom = profile.nodes[node]?.betFrom ?? 99;
+    final where = node == BetNode.checkedTo ? 'You checked — ' : "I'm first — ";
+    if (betFrom > 14) return '${where}I just check this spot.';
+    return '${where}I pot ${_bare(betFrom)}+ and check the rest.';
+  }
+
+  String _botFacingSpeech(BetNode node) => _facingSpeech(node);
+
+  String _facingSpeech(BetNode node) {
     final inRange = (_botRange.toList()..sort());
     if (inRange.isEmpty) return '…';
     final folds = <int>[], calls = <int>[], pots = <int>[];
     for (final v in inRange) {
-      switch (_botMove(v, facing: true)) {
+      switch (profile.moveAt(node, v)) {
         case BotMove.pot:
           pots.add(v);
         case BotMove.call:

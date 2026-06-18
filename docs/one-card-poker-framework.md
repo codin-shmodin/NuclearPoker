@@ -1,150 +1,107 @@
-# Quest 1 — "One Card Poker" Framework Design
+# Poker Engine & One-Card Poker (as built)
 
-> Status: **Design (draft)**, 2026-06-14. First quest. Goal: build the reusable poker
-> framework + AI player system, using the simplest solvable poker variant as the testbed.
-> Stack per [`stack-management.md`](./stack-management.md): Flutter + Dart, on-device.
+> Status: **Implemented**, updated 2026-06-16. The reusable poker engine + the one-card-poker
+> rules that Quest 1 runs on. Stack per [`stack-management.md`](./stack-management.md): Flutter +
+> Dart, on-device. The current Quest 1 experience is the
+> [Heads-Up Trainer](./heads-up-trainer.md).
 
 ---
 
-## 1. Why this quest first
-"One card poker" is the smallest real poker game. It lets us build and **validate the entire
-framework** — game engine, player interface, GTO bot, UI/animation, quest wrapper — before any
-postflop complexity exists. Heads-up, it's essentially **Kuhn poker** (the classic game-theory
-teaching game), which has a known exact GTO solution. That makes it the ideal place to prove the
-"perfect static GTO player" you asked for.
+## 1. What this is
+One-card poker is the smallest real poker game: each player gets **one** private card, there's a
+single betting round, high card wins. It's the testbed for the whole framework (engine, player
+interface, UI/animation) and the basis of the learning game.
 
-## 2. Rules spec (agreed)
-- **Variant:** Standard — each player gets **1 private card they can see**. High card wins.
-- **Players:** up to **6** at a table (engine is player-count-agnostic; see §6 on GTO).
-- **Betting:** **check / bet / call / fold**, single fixed bet size, **one betting round**, **no raises** (simple mode).
-- **Deck:** standard 52, ranks 2→A. Suits don't rank; **ties split the pot**.
-
-### Level 1 settings (implemented)
-- **Table:** hero + **5 straightforward bots** (6-handed). Starting stack **30 chips**.
-- **Forced bets:** **no ante, 1/1 blinds** (small + big blind = 1 each). The engine supports
-  antes too (`RuleConfig.ante`), but Level 1 uses blinds.
-- **Betting:** check/call/fold plus a single **bet/raise to `betSize` (4)** — one raise, no re-raises.
-- **Action order:** dealer button rotates each hand; first to act = seat left of button.
-- **Bet flow:** in turn each player checks or bets `B`. Once a bet is out, later players call/fold.
-  If a bet lands *after* players have checked, action reopens to them (call/fold only — no raise).
-  All-check → straight to showdown.
-- **Showdown:** remaining players reveal; highest rank wins; equal ranks split the pot.
-
-*(These are the only knobs that change the engine; flag any you'd change.)*
+## 2. Rules (as implemented)
+- **Card:** each player gets 1 private card. Standard 52-card deck, ranks 2→A (Ace high). Suits do
+  **not** rank — **ties split the pot**.
+- **One betting round:** actions are **fold / check / call / bet**. "Bet" is a **pot-sized** raise
+  (see §4). Raising is **uncapped** — you can keep re-raising until someone is all-in.
+- **Forced bets:** blinds (small/big) and/or antes, configurable. Showdown: highest card wins; equal
+  ranks split; all-ins resolved with **side pots**.
+- **Player count:** engine is player-count-agnostic (heads-up to 6). Heads-up is special-cased so the
+  button is the small blind and acts first (standard heads-up rules).
 
 ## 3. Architecture principles
-1. **Pure-Dart engine, zero Flutter dependencies.** The rules + state machine + players live in a
-   standalone package so they're unit-testable, runnable *headless* (needed to compute GTO), and
-   reusable across all future quests. UI never contains game rules.
-2. **Players are policies behind one interface** (strategy pattern). Bots are content, not new code.
-3. **Information hiding:** a player only ever receives a `GameView` — exactly what a real player at
-   that seat could see (own card, public actions, pot, stacks). No peeking at others' cards. This
-   also keeps bots honest and makes the same interface work for the human UI.
-4. **Deterministic & seedable:** shuffles and mixed-strategy dice rolls take an injectable RNG, so
-   hands are reproducible for tests and replays.
+1. **Pure-Dart engine, zero Flutter imports** (`lib/engine/`). Rules + state machine + players are
+   unit-testable and could run headless. The UI never contains game rules.
+2. **Players are policies behind one interface** (`PokerPlayer`). Bots — and the human — are
+   interchangeable; new opponents are content, not engine changes.
+3. **Information hiding:** a player only ever receives a `GameView` (its own card, the pot, what it
+   must call, public opponent info). It can't see other hole cards.
+4. **Deterministic & seedable:** the deck shuffle takes an injected `Random`, so hands are
+   reproducible in tests.
 
-## 4. Core domain model (engine package)
+## 4. Betting model — pot-sized, uncapped, with side pots
+- **A bet/raise is "pot-sized":** you raise **to** `currentBet + pot + yourCall` (the standard
+  pot-limit raise — you call first, then bet the resulting pot). Opening with nothing to call →
+  `currentBet + pot`. Example: heads-up 1/1 blinds, the button (call 0) pots → raises to **3**.
+- **Uncapped:** keep raising (3-bet, 4-bet, …) until a player is all-in; you may shove for less than
+  a full pot if that's all you have.
+- **All-ins → side pots:** at showdown the pot is split into contribution layers; each layer goes to
+  the best card among players eligible for it. **Uncalled chips are refunded before settling** (a lone
+  top bettor can't win more than was matched) — this is the standard rule and avoids a "split pot"
+  mislabel.
+- **Fold-out:** if everyone folds to one player, they take the whole pot (their uncalled bet returns).
+- **Sit-out:** a player with 0 chips sits the hand out — no card, no blind, never to act.
 
-```dart
-// cards/
-enum Rank { two, three, ..., ace }          // suits tracked but don't rank
-class Card { final Rank rank; final Suit suit; }
-class Deck { Deck(Random rng); Card draw(); }
-
-// game/
-enum ActionType { check, bet, call, fold }
-class Action { final ActionType type; final int amount; }      // amount used for bet/call
-
-class Seat { final int index; int stack; Card? card; bool folded; int committed; }
-
-class GameView {            // what ONE player sees when asked to act
-  final Card myCard;
-  final int myStack, pot, toCall;
-  final List<PublicAction> history;
-  final int seatsInHand;
-  final int myPosition;     // relative to button
-}
-
-class HandState { /* seats, pot, button, toAct, betting status */ }
-
-enum HandPhase { deal, betting, showdown, payout, done }
-
-// The state machine: pure functions advancing a hand.
-class HandEngine {
-  HandState start(List<PokerPlayer> players, int button, RuleConfig rules, Random rng);
-  HandState applyAction(HandState s, Action a);   // validates + advances
-  List<Payout> settle(HandState s);               // showdown → chip movement
-}
-
-class RuleConfig { final int ante, betSize, maxPlayers; }   // tunable via Remote Config later
+## 5. Core domain model (`lib/engine/`)
 ```
-
-### Player interface
-```dart
-abstract class PokerPlayer {
-  String get id;                         // "gto", "the-nit", "the-maniac", "human"...
-  Action decide(GameView view);          // returns a legal action
-}
+cards/   Rank (label + value 2..14), Suit (symbol, isRed; no rank), PlayingCard, Deck(Random)
+game/    ActionType{fold,check,call,bet}, GameAction(type, amount)
+         RuleConfig{ante, smallBlind, bigBlind, startingStack, maxPlayers}
+         Seat{index, playerId, name, isHuman, stack, card?, folded, hasActed, committed, lastWin, lastAction}
+         GameView (redacted per-seat view: myCard, pot, toCall, currentBet, canCheck/canCall/canBet,
+                   raiseTarget, isOpen, raiseCount, opponents[])
+         HandState{seats, button, toAct, pot, currentBet, raiseCount, phase,
+                   smallBlindSeat, bigBlindSeat, winners[], log[]}
+         HandPhase{betting, showdown, complete}
+         HandEngine: start(seats, button) → deals/posts blinds; legalActions(state);
+                     applyAction(state, action) (validates + advances); buildView(state, seat).
+players/ PokerPlayer (interface: decide(GameView)→GameAction)
+         HumanPlayer (UI-driven; decide() unused), SimpleAiPlayer (heuristic), RangeBot (trainer)
 ```
+`HandState` is mutated in place by the engine (kept simple for the PoC).
 
-## 5. AI player roster (three tiers, one interface)
+## 6. AI players (`PokerPlayer` implementations)
+- **`SimpleAiPlayer`** — heuristic bot with personality knobs (`tightness`, `aggression`, `bluffFreq`,
+  `callStation`) and presets (Nit / TAG / LAG / Maniac / Calling Station / Straightforward). Used by
+  the legacy 6-max table screen.
+- **`RangeBot`** — the **fully transparent** trainer bot whose strategy is simple rank thresholds, so
+  the UI can show and narrate its exact range. See [`heads-up-trainer.md`](./heads-up-trainer.md).
+- **GTO is deferred.** The original plan (offline CFR → lookup table) is on hold; the transparent
+  hand-authored `RangeBot` serves the learning goal for now. CFR remains a future option (heads-up
+  one-card poker is small enough to solve exactly).
 
-| Tier | Implementation | Role |
-|---|---|---|
-| **1 — GTO (static)** | `GtoPlayer`: looks up the precomputed strategy for `(card, position, history)` and **mixes** per the GTO frequencies using the injected RNG. No runtime computation. | Your **perfect static GTO** opponent / trainer. |
-| **2 — Personalities** | `PersonalityPlayer(params)`: rule engine driven by `{aggression, tightness, bluffFreq, callThreshold}`. Presets = characters: **Nit, Rock, TAG, LAG, Maniac, Calling Station**. | Unlimited distinct beatable opponents for the gamified ladder. |
-| **3 — Solver/ML (future)** | Same interface, postflop engine plugged in later. | Out of scope for quest 1. |
-
-`HumanPlayer` is also just a `PokerPlayer` whose `decide()` resolves from UI input — so the engine
-treats humans and bots identically.
-
-## 6. The GTO solution (offline → lookup table)
-- **Approach:** solve **offline** with **CFR** (counterfactual regret minimization), export the
-  resulting average strategy to a compact table bundled in the app. Runtime cost = a map lookup +
-  one RNG draw.
-- **Heads-up (2p):** zero-sum → CFR converges to the **unique exact GTO**. We compute and ship this
-  as the genuinely-perfect bot, and use it to validate the whole engine (known Kuhn-poker results
-  are a built-in correctness check).
-- **6-max (multiway):** equilibria are **not unique** and 2p guarantees don't hold. CFR still
-  produces a **strong approximate** strategy — good enough for a tough opponent, but we will label it
-  internally as *approximate*, not *provably optimal*. **Plan: validate heads-up first, then
-  generalize.**
-- The solver is a headless script using the pure-Dart engine — no UI, no extra infra.
-
-## 7. Proposed project structure
+## 7. Project structure (actual)
 ```
-nuclear_poker/
-  packages/
-    poker_engine/            # pure Dart, no Flutter
-      lib/{cards,game,players,gto}/
-      test/                  # heavy unit tests (rules, payouts, GTO correctness)
-      tool/solve_gto.dart    # headless CFR solver → exports strategy table
-  lib/                       # Flutter app
-    features/quest_one_card/ # this quest's screens, controllers, animations (Rive)
-    core/                    # shared UI, theming, routing
-    services/                # Firebase, analytics, remote config
-  assets/gto/                # exported GTO strategy tables
-  docs/
+lib/
+  main.dart, app.dart            entry + MaterialApp/theme
+  theme/                         AppColors, AppTheme
+  home/                          quest map / start screen
+  engine/{cards,game,players}/   pure-Dart engine (above)
+  features/
+    quest_one_card/              legacy 6-max table (QuestController + screen + widgets)
+    headsup_trainer/             CURRENT Quest 1 (see heads-up-trainer.md)
+test/
+  engine_test.dart               engine rules / pot-sizing / all-in / side-pot tests
+  widget_test.dart               home-screen smoke test
 ```
-**Why a separate engine package:** testability, headless GTO solving, and reuse across every future
-quest without dragging UI along.
+The engine lives in a folder (not a separate package) but stays Flutter-free, so it can be extracted
+later.
 
-## 8. Hooks into the gamified meta (deferred, but designed-for)
-- A `Quest` wraps a configured table (rules + opponent roster + win condition) and emits results the
-  reward/progression system consumes. Quest 1 = "beat the table over N hands" or "reach X chips".
-- `RuleConfig` and opponent params are designed to be driven by **Firebase Remote Config** so we can
-  tune difficulty/rewards without shipping updates.
-- Detailed reward-loop / progression design is a **separate doc** (TBD after market research lands).
+## 8. Testing
+`flutter test` (12 tests). Engine coverage: blinds posting + first-to-act, check-around showdown,
+fold-out, illegal check, pot-sized 3-bet sizing, uncapped raising, all-in for less / no-hang, side-pot
+chip conservation, "K vs A → Ace wins outright (no false split)", redacted view. Determinism via
+seeded `Random`.
 
-## 9. Testing strategy
-- Engine: exhaustive unit tests on legal-action validation, betting flow, multiway showdown/ties,
-  payouts, button rotation.
-- GTO: assert heads-up output matches known Kuhn-poker equilibrium values.
-- Determinism: same seed → same hand, enabling golden-file replay tests.
+## 9. Hooks into the gamified meta (future)
+- A quest wraps a configured table (rules + opponents + win condition) and emits results the
+  reward/progression layer will consume.
+- `RuleConfig` is designed to be driven by **Firebase Remote Config** so difficulty/economy can be
+  tuned without an app update.
+- Reward-loop / progression design is still TBD (informed by `../MARKET_RESEARCH.md`).
 
-## 10. Open decisions
-1. Ante vs blinds, and exact `ante`/`betSize` values (§2).
-2. Single fixed bet only, or allow one raise later (changes tree size).
-3. Heads-up-only for quest 1 to keep GTO "perfect", or ship 6-max with approximate GTO from the start.
-4. Win condition / framing of the quest itself (depends on reward-loop design).
-```
+## 10. Run
+`flutter run -d chrome` (also iOS/Android). Flutter ≥ 3.27 (uses `Color.withValues`).

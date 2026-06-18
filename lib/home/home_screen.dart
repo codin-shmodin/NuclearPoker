@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 
-import '../features/headsup_trainer/headsup_screen.dart';
+import '../features/headsup_trainer/bot_picker_screen.dart';
 import '../theme/app_colors.dart';
 
 /// The lightweight "quest map" entry point. For now it holds one quest;
@@ -75,7 +75,7 @@ class HomeScreen extends StatelessWidget {
                   unlocked: true,
                   onTap: () => Navigator.of(context).push(
                     MaterialPageRoute<void>(
-                      builder: (_) => const HeadsUpScreen(),
+                      builder: (_) => const BotPickerScreen(),
                     ),
                   ),
                 ).animate().fadeIn(delay: 200.ms, duration: 500.ms).slideY(

@@ -3,11 +3,16 @@ import 'package:flutter/material.dart';
 import '../../../theme/app_colors.dart';
 import '../headsup_controller.dart';
 
-/// EV hint bar: for each card the bot might hold, what potting is worth for us.
-/// Colour runs bright red (lose a lot) → grey (≈0) → bright green (win a lot).
+/// Immediate-EV hint bar: for the action the player is hovering, the option-A
+/// net chip result against each card the bot might hold — what you end the hand
+/// with, for the lines that resolve when the bot answers. A "?" marks a card
+/// where your action hands the decision back to you (we don't guess your next
+/// move). Colour runs bright red (lose a lot) → grey (≈0) → bright green (win a
+/// lot). The footer shows the average across the known (non-"?") cards.
 class EvBar extends StatelessWidget {
-  const EvBar({super.key, required this.cells});
+  const EvBar({super.key, required this.title, required this.cells});
 
+  final String title;
   final List<EvCell> cells;
 
   static const Color _grey = Color(0xFF5B6470);
@@ -22,8 +27,12 @@ class EvBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final anyActive = cells.any((c) => c.active);
+    final known = cells.where((c) => c.active && !c.unknown).toList();
+    final average = known.isEmpty
+        ? null
+        : known.fold<int>(0, (sum, c) => sum + c.ev) / known.length;
     return Container(
-      width: 104,
+      width: 116,
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
       decoration: BoxDecoration(
         color: AppColors.background.withValues(alpha: 0.45),
@@ -32,10 +41,10 @@ class EvBar extends StatelessWidget {
       ),
       child: Column(
         children: [
-          const Text(
-            'YOUR EV IF YOU POT',
+          Text(
+            title,
             textAlign: TextAlign.center,
-            style: TextStyle(
+            style: const TextStyle(
               fontSize: 9.5,
               fontWeight: FontWeight.w800,
               color: AppColors.textMuted,
@@ -53,7 +62,7 @@ class EvBar extends StatelessWidget {
                   )
                 : const Center(
                     child: Text(
-                      'Shown on\nyour turn',
+                      'Hover an\naction',
                       textAlign: TextAlign.center,
                       style: TextStyle(
                         fontSize: 10,
@@ -62,9 +71,25 @@ class EvBar extends StatelessWidget {
                     ),
                   ),
           ),
+          if (anyActive && average != null) ...[
+            const SizedBox(height: 4),
+            Text(
+              'Avg ${_signed(average)}',
+              style: const TextStyle(
+                fontSize: 9.5,
+                fontWeight: FontWeight.w700,
+                color: AppColors.textMuted,
+              ),
+            ),
+          ],
         ],
       ),
     );
+  }
+
+  static String _signed(double v) {
+    final s = v.abs() < 0.05 ? '0' : v.toStringAsFixed(1);
+    return v > 0.05 ? '+$s' : (v < -0.05 ? '-${v.abs().toStringAsFixed(1)}' : s);
   }
 }
 
@@ -96,6 +121,38 @@ class _EvRow extends StatelessWidget {
         ),
       );
     }
+    if (cell.unknown) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 1),
+        child: Row(
+          children: [
+            _rankLabel(true),
+            const SizedBox(width: 4),
+            Expanded(
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.06),
+                  borderRadius: BorderRadius.circular(3),
+                  border: Border.all(
+                    color: AppColors.potPurple.withValues(alpha: 0.5),
+                  ),
+                ),
+                child: const Center(
+                  child: Text(
+                    '?',
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w900,
+                      color: AppColors.textMuted,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 1),
       child: Row(
@@ -106,7 +163,7 @@ class _EvRow extends StatelessWidget {
             child: AnimatedContainer(
               duration: const Duration(milliseconds: 300),
               alignment: Alignment.center,
-              padding: const EdgeInsets.symmetric(horizontal: 2),
+              padding: const EdgeInsets.symmetric(horizontal: 3),
               decoration: BoxDecoration(
                 color: EvBar.colorFor(cell.color),
                 borderRadius: BorderRadius.circular(3),
@@ -129,7 +186,7 @@ class _EvRow extends StatelessWidget {
                   ),
                   const SizedBox(width: 2),
                   Text(
-                    _chips(cell.chips),
+                    _chips(cell.ev),
                     style: const TextStyle(
                       fontSize: 10,
                       fontWeight: FontWeight.w900,

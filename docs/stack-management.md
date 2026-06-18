@@ -1,4 +1,4 @@
-# Stack Management — NuclearPoker
+re# Stack Management — NuclearPoker
 
 > Status: **Approved** (2026-06-14). The agreed technical stack for the PoC.
 

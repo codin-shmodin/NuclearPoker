@@ -5,6 +5,7 @@ import 'package:flutter_animate/flutter_animate.dart';
 import '../../engine/game/action.dart';
 import '../../engine/game/hand_state.dart';
 import '../../engine/game/seat.dart';
+import '../../engine/players/bot_profile.dart';
 import '../../theme/app_colors.dart';
 import '../quest_one_card/widgets/chip_stack_widget.dart';
 import '../quest_one_card/widgets/playing_card_widget.dart';
@@ -14,7 +15,9 @@ import 'widgets/range_bar.dart';
 
 /// Heads-up trainer: defend your big blind against a transparent range bot.
 class HeadsUpScreen extends StatefulWidget {
-  const HeadsUpScreen({super.key});
+  const HeadsUpScreen({super.key, required this.profile});
+
+  final BotProfile profile;
 
   @override
   State<HeadsUpScreen> createState() => _HeadsUpScreenState();
@@ -26,7 +29,7 @@ class _HeadsUpScreenState extends State<HeadsUpScreen> {
   @override
   void initState() {
     super.initState();
-    controller = HeadsUpController();
+    controller = HeadsUpController(profile: widget.profile);
   }
 
   @override
@@ -81,7 +84,13 @@ class _HeadsUpScreenState extends State<HeadsUpScreen> {
                             ),
                             if (controller.hintOn) ...[
                               const SizedBox(width: 8),
-                              EvBar(cells: controller.evCells),
+                              EvBar(
+                                title: _evTitle(controller.hoveredAction),
+                                cells: controller.hoveredAction == null
+                                    ? const []
+                                    : controller
+                                        .evCellsForAction(controller.hoveredAction!),
+                              ),
                             ],
                           ],
                         ),
@@ -96,6 +105,21 @@ class _HeadsUpScreenState extends State<HeadsUpScreen> {
         ),
       ),
     );
+  }
+}
+
+String _evTitle(ActionType? action) {
+  switch (action) {
+    case ActionType.bet:
+      return 'IMMEDIATE EV\nif you pot';
+    case ActionType.call:
+      return 'IMMEDIATE EV\nif you call';
+    case ActionType.check:
+      return 'IMMEDIATE EV\nif you check';
+    case ActionType.fold:
+      return 'IMMEDIATE EV\nif you fold';
+    case null:
+      return 'IMMEDIATE EV';
   }
 }
 
@@ -512,16 +536,32 @@ class _BottomPanel extends StatelessWidget {
 
     final buttons = <Widget>[
       if (view.toCall > 0)
-        _ActBtn(label: 'Fold', color: AppColors.danger, onTap: controller.fold),
+        _ActBtn(
+          label: 'Fold',
+          color: AppColors.danger,
+          onTap: controller.fold,
+          onHover: (h) => controller.setHoveredAction(h ? ActionType.fold : null),
+        ),
       if (view.canCheck)
-        _ActBtn(label: 'Check', color: AppColors.chipBlue, onTap: controller.check),
+        _ActBtn(
+          label: 'Check',
+          color: AppColors.chipBlue,
+          onTap: controller.check,
+          onHover: (h) => controller.setHoveredAction(h ? ActionType.check : null),
+        ),
       if (view.canCall)
-        _ActBtn(label: 'Call ${view.toCall}', color: AppColors.chipGreen, onTap: controller.call),
+        _ActBtn(
+          label: 'Call ${view.toCall}',
+          color: AppColors.chipGreen,
+          onTap: controller.call,
+          onHover: (h) => controller.setHoveredAction(h ? ActionType.call : null),
+        ),
       if (view.canBet)
         _ActBtn(
           label: 'Pot ${view.raiseTarget}',
           color: AppColors.potPurpleDeep,
           onTap: controller.pot,
+          onHover: (h) => controller.setHoveredAction(h ? ActionType.bet : null),
         ),
     ];
 
@@ -541,24 +581,30 @@ class _ActBtn extends StatelessWidget {
     required this.label,
     required this.color,
     required this.onTap,
+    this.onHover,
   });
 
   final String label;
   final Color color;
   final VoidCallback onTap;
+  final ValueChanged<bool>? onHover;
 
   @override
   Widget build(BuildContext context) {
-    return FilledButton(
-      onPressed: onTap,
-      style: FilledButton.styleFrom(
-        backgroundColor: color,
-        foregroundColor: Colors.white,
-        padding: const EdgeInsets.symmetric(vertical: 16),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-        textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
+    return MouseRegion(
+      onEnter: (_) => onHover?.call(true),
+      onExit: (_) => onHover?.call(false),
+      child: FilledButton(
+        onPressed: onTap,
+        style: FilledButton.styleFrom(
+          backgroundColor: color,
+          foregroundColor: Colors.white,
+          padding: const EdgeInsets.symmetric(vertical: 16),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
+        ),
+        child: Text(label),
       ),
-      child: Text(label),
     );
   }
 }

@@ -35,4 +35,20 @@ class Seat {
     lastWin = 0;
     lastAction = null;
   }
+
+  /// A deep copy of this seat's full state. Used by the EV evaluator to explore
+  /// hypothetical lines without disturbing the live hand.
+  Seat clone() => Seat(
+        index: index,
+        playerId: playerId,
+        name: name,
+        isHuman: isHuman,
+        stack: stack,
+      )
+        ..card = card
+        ..folded = folded
+        ..hasActed = hasActed
+        ..committed = committed
+        ..lastWin = lastWin
+        ..lastAction = lastAction;
 }

@@ -23,7 +23,13 @@ class RangeBar extends StatelessWidget {
       case RangeBucket.check:
         return AppColors.chipBlue;
       case RangeBucket.shown:
-        return AppColors.gold;
+        return const Color(0xFF5B6470); // neutral grey — "cards he can have"
+      case RangeBucket.win:
+        return AppColors.chipGreen;
+      case RangeBucket.lose:
+        return AppColors.danger;
+      case RangeBucket.tie:
+        return AppColors.chipBlue;
     }
   }
 
@@ -39,6 +45,12 @@ class RangeBar extends StatelessWidget {
         return 'CHECK';
       case RangeBucket.shown:
         return 'RANGE';
+      case RangeBucket.win:
+        return 'WIN';
+      case RangeBucket.lose:
+        return 'LOSE';
+      case RangeBucket.tie:
+        return 'SPLIT';
     }
   }
 

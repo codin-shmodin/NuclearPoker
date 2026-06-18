@@ -38,4 +38,23 @@ class HandState {
 
   List<Seat> get liveSeats =>
       seats.where((s) => !s.folded).toList(growable: false);
+
+  /// A deep copy of the whole hand (seats included), so the EV evaluator can
+  /// apply hypothetical actions on a throwaway state. The log is intentionally
+  /// dropped — EV roll-outs don't need narration.
+  HandState clone() {
+    final copy = HandState(
+      seats: [for (final s in seats) s.clone()],
+      button: button,
+      toAct: toAct,
+      pot: pot,
+      currentBet: currentBet,
+      phase: phase,
+    )
+      ..raiseCount = raiseCount
+      ..smallBlindSeat = smallBlindSeat
+      ..bigBlindSeat = bigBlindSeat;
+    copy.winners.addAll(winners);
+    return copy;
+  }
 }
