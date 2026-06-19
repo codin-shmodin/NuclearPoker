@@ -12,7 +12,7 @@ class LevelDef {
     required this.id,
     required this.title,
     required this.botProfileId,
-    required this.rewardId,
+    required this.coinReward,
     required this.mapPosition,
     this.startingStack = 50,
   });
@@ -26,9 +26,9 @@ class LevelDef {
   /// Resolves to a [BotProfile] via [botProfileFor].
   final String botProfileId;
 
-  /// The particle/material dropped on first clear. Emoji placeholder for now;
-  /// becomes a themed asset later (see docs/expansion-plans.md §2).
-  final String rewardId;
+  /// Coins paid out on first clear (replays are rewardless). The harder the
+  /// opponent's slot on the ladder, the bigger the payout (1 → 2 → 3).
+  final int coinReward;
 
   /// Normalized 0..1 position on the map background (x, y), where (0,0) is the
   /// top-left and (1,1) the bottom-right of the scrollable map canvas.
@@ -39,28 +39,28 @@ class LevelDef {
 }
 
 /// The single source of truth for the ladder. The first three levels reuse the
-/// three existing bot personalities (Rocky → Vex → Sage), roughly in difficulty
-/// order. Positions snake bottom→top so the path reads as a climb.
+/// three existing bot personalities (Vex → Rocky → Sage). Each clear pays out
+/// coins (1 → 2 → 3). Positions snake bottom→top so the path reads as a climb.
 const List<LevelDef> kLevels = [
   LevelDef(
     id: 1,
-    title: 'The Rookie',
-    botProfileId: 'rock',
-    rewardId: '⚛️',
+    title: 'The Maniac',
+    botProfileId: 'maniac',
+    coinReward: 1,
     mapPosition: Offset(0.30, 0.13),
   ),
   LevelDef(
     id: 2,
-    title: 'The Maniac',
-    botProfileId: 'maniac',
-    rewardId: '⚪',
+    title: 'The Rookie',
+    botProfileId: 'rock',
+    coinReward: 2,
     mapPosition: Offset(0.68, 0.46),
   ),
   LevelDef(
     id: 3,
     title: 'The Shark',
     botProfileId: 'pro',
-    rewardId: '🔶',
+    coinReward: 3,
     mapPosition: Offset(0.32, 0.80),
   ),
 ];

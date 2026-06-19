@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 
 import 'features/adventure_map/adventure_map_screen.dart';
+import 'identity/identity.dart';
+import 'identity/register_screen.dart';
+import 'theme/app_colors.dart';
 import 'theme/app_theme.dart';
 
 class NuclearPokerApp extends StatelessWidget {
@@ -12,7 +15,53 @@ class NuclearPokerApp extends StatelessWidget {
       title: 'NuclearPoker',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.dark,
-      home: const AdventureMapScreen(),
+      home: const _Gate(),
     );
+  }
+}
+
+/// Decides the entry screen: register first-run, otherwise the map for the
+/// signed-in account. The chosen account is remembered across restarts.
+class _Gate extends StatefulWidget {
+  const _Gate();
+
+  @override
+  State<_Gate> createState() => _GateState();
+}
+
+class _GateState extends State<_Gate> {
+  final AccountStore _accounts = LocalAccountStore();
+  Identity? _identity;
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _accounts.current().then((id) {
+      if (!mounted) return;
+      setState(() {
+        _identity = id;
+        _loading = false;
+      });
+    });
+  }
+
+  Future<void> _register(String username, String password) async {
+    final id = await _accounts.register(username, password);
+    if (mounted) setState(() => _identity = id);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) {
+      return const Scaffold(
+        backgroundColor: AppColors.background,
+        body: Center(child: CircularProgressIndicator(color: AppColors.gold)),
+      );
+    }
+    final id = _identity;
+    if (id == null) return RegisterScreen(onSubmit: _register);
+    // Re-key the map per account so switching users loads the right data.
+    return AdventureMapScreen(key: ValueKey(id.namespace), identity: id);
   }
 }

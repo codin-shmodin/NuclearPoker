@@ -15,7 +15,12 @@ abstract class ProgressStore {
 /// The PoC store: a small list of completed level ids in `shared_preferences`.
 /// One on-device dependency, no backend, works on iOS/Android/web.
 class SharedPrefsProgressStore implements ProgressStore {
-  static const String _key = 'completed_level_ids';
+  SharedPrefsProgressStore({this.namespace = ''});
+
+  /// Per-user key prefix, so each account's progress is separate.
+  final String namespace;
+
+  String get _key => '${namespace}completed_level_ids';
 
   @override
   Future<LevelProgress> load() async {

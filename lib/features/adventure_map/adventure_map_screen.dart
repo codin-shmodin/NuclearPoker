@@ -1,12 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 
+import '../../identity/identity.dart';
 import '../../theme/app_colors.dart';
-import '../headsup_trainer/bot_picker_screen.dart';
+import '../headsup_trainer/headsup_controller.dart';
 import '../headsup_trainer/headsup_screen.dart';
 import 'level.dart';
 import 'line_store.dart';
 import 'progress_store.dart';
+import 'range_chart_screen.dart';
 
 // ---- Desert palette (placeholder art) -------------------------------------
 const Color _skyTop = Color(0xFFF6DCA6);
@@ -24,19 +26,33 @@ const Color _trailBrown = Color(0xFF8A5A2B);
 /// positions everything by normalized coordinates so real art slots into the
 /// same frame later with no structural change. See docs/adventure-map.md.
 class AdventureMapScreen extends StatefulWidget {
-  const AdventureMapScreen({super.key, this.store});
+  const AdventureMapScreen({
+    super.key,
+    this.store,
+    this.identity = const Identity('guest', ''),
+  });
 
   /// Injectable for tests; defaults to the on-device prefs store.
   final ProgressStore? store;
+
+  /// Who's playing — keys per-user storage and grants admin (all levels +
+  /// auto-play).
+  final Identity identity;
 
   @override
   State<AdventureMapScreen> createState() => _AdventureMapScreenState();
 }
 
 class _AdventureMapScreenState extends State<AdventureMapScreen> {
-  late final ProgressStore _store = widget.store ?? SharedPrefsProgressStore();
-  final LineStore _lineStore = SharedPrefsLineStore();
+  late final ProgressStore _store =
+      widget.store ?? SharedPrefsProgressStore(namespace: widget.identity.namespace);
+  late final LineStore _lineStore =
+      SharedPrefsLineStore(namespace: widget.identity.namespace);
   final ScrollController _scroll = ScrollController();
+
+  /// Live trainer controllers per level. A level kept here after you leave it is
+  /// auto-playing in the background (its map badge animates).
+  final Map<int, HeadsUpController> _sessions = {};
 
   LevelProgress _progress = const LevelProgress.empty();
   bool _loading = true;
@@ -55,12 +71,18 @@ class _AdventureMapScreenState extends State<AdventureMapScreen> {
 
   @override
   void dispose() {
+    for (final c in _sessions.values) {
+      c.dispose();
+    }
     _scroll.dispose();
     super.dispose();
   }
 
   Future<void> _load() async {
-    final progress = await _store.load();
+    // Admin sees every level cleared (so all are unlocked + auto-play enabled).
+    final progress = widget.identity.isAdmin
+        ? LevelProgress({for (final l in kLevels) l.id})
+        : await _store.load();
     if (!mounted) return;
     setState(() {
       _progress = progress;
@@ -68,8 +90,25 @@ class _AdventureMapScreenState extends State<AdventureMapScreen> {
     });
   }
 
+  /// Build (or reuse) the trainer controller for a level and load its line.
+  HeadsUpController _makeController(LevelDef level, bool unlocked) {
+    final c = HeadsUpController(
+      profile: botProfileFor(level.botProfileId),
+      startingStack: level.startingStack,
+      autoPlayUnlocked: unlocked,
+    );
+    c.onLineChanged = () => _lineStore.save(level.id, c.savedLine);
+    _lineStore.load(level.id).then((line) => c.setSavedLine(line));
+    return c;
+  }
+
   Future<void> _launchLevel(LevelDef level) async {
     final wasCompleted = _progress.isCompleted(level.id);
+    // Resume a backgrounded session if one is already running here.
+    final controller =
+        _sessions[level.id] ??= _makeController(level, wasCompleted);
+    setState(() {}); // node starts reflecting the session
+
     final won = await Navigator.of(context).push<bool>(
       MaterialPageRoute<bool>(
         builder: (_) => HeadsUpScreen(
@@ -80,10 +119,19 @@ class _AdventureMapScreenState extends State<AdventureMapScreen> {
           // Save-line + auto-play unlock once you've already cleared this level.
           autoPlayUnlocked: wasCompleted,
           lineStore: _lineStore,
+          controller: controller,
         ),
       ),
     );
     if (!mounted) return;
+
+    // Keep the session alive only if it's auto-playing in the background;
+    // otherwise tear it down.
+    if (!controller.autoPlayOn) {
+      controller.dispose();
+      _sessions.remove(level.id);
+    }
+
     // Reward + unlock only fire on the *first* clear (replays are rewardless).
     if (won == true && !wasCompleted) {
       await _store.markComplete(level.id);
@@ -94,8 +142,10 @@ class _AdventureMapScreenState extends State<AdventureMapScreen> {
       setState(() {
         _progress = updated;
         _justUnlockedId = hasNext ? nextId : null;
-        _rewardBurst = level.rewardId;
+        _rewardBurst = '🪙 +${level.coinReward}';
       });
+    } else {
+      setState(() {}); // refresh badges (a session may have started/stopped)
     }
   }
 
@@ -127,13 +177,14 @@ class _AdventureMapScreenState extends State<AdventureMapScreen> {
                       child: _Hud(
                         completed: _progress.completedLevelIds.length,
                         total: kLevels.length,
-                        rewards: [
+                        coins: [
                           for (final l in kLevels)
-                            if (_progress.isCompleted(l.id)) l.rewardId,
-                        ],
-                        onPractice: () => Navigator.of(context).push(
+                            if (_progress.isCompleted(l.id)) l.coinReward,
+                        ].fold(0, (sum, c) => sum + c),
+                        onRangeChart: () => Navigator.of(context).push(
                           MaterialPageRoute<void>(
-                            builder: (_) => const BotPickerScreen(),
+                            builder: (_) =>
+                                RangeChartScreen(lineStore: _lineStore),
                           ),
                         ),
                       ),
@@ -193,6 +244,7 @@ class _AdventureMapScreenState extends State<AdventureMapScreen> {
         level: level,
         status: status,
         justUnlocked: _justUnlockedId == level.id,
+        session: _sessions[level.id],
         onTap: status == LevelStatus.locked ? null : () => _launchLevel(level),
       ),
     );
@@ -202,7 +254,14 @@ class _AdventureMapScreenState extends State<AdventureMapScreen> {
     return Positioned.fill(
       child: IgnorePointer(
         child: Center(
-          child: Text(reward, style: const TextStyle(fontSize: 96))
+          child: Text(
+            reward,
+            style: const TextStyle(
+              fontSize: 64,
+              fontWeight: FontWeight.w900,
+              color: AppColors.goldBright,
+            ),
+          )
               .animate(
                 onComplete: (_) {
                   if (mounted) setState(() => _rewardBurst = null);
@@ -230,14 +289,14 @@ class _Hud extends StatelessWidget {
   const _Hud({
     required this.completed,
     required this.total,
-    required this.rewards,
-    required this.onPractice,
+    required this.coins,
+    required this.onRangeChart,
   });
 
   final int completed;
   final int total;
-  final List<String> rewards;
-  final VoidCallback onPractice;
+  final int coins;
+  final VoidCallback onRangeChart;
 
   @override
   Widget build(BuildContext context) {
@@ -292,13 +351,13 @@ class _Hud extends StatelessWidget {
               ],
             ),
           ),
-          _RewardTray(rewards: rewards),
+          _RewardTray(coins: coins),
           const SizedBox(width: 4),
           IconButton(
-            tooltip: 'Free play',
-            onPressed: onPractice,
-            icon:
-                const Icon(Icons.sports_esports, color: AppColors.textPrimary),
+            tooltip: 'Your ranges',
+            onPressed: onRangeChart,
+            icon: const Icon(Icons.grid_view_rounded,
+                color: AppColors.textPrimary),
           ),
         ],
       ),
@@ -306,10 +365,11 @@ class _Hud extends StatelessWidget {
   }
 }
 
+/// The coin purse in the header: total coins earned across cleared levels.
 class _RewardTray extends StatelessWidget {
-  const _RewardTray({required this.rewards});
+  const _RewardTray({required this.coins});
 
-  final List<String> rewards;
+  final int coins;
 
   @override
   Widget build(BuildContext context) {
@@ -323,14 +383,16 @@ class _RewardTray extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          if (rewards.isEmpty)
-            const Text('—',
-                style: TextStyle(color: AppColors.textMuted, fontSize: 16))
-          else
-            for (final r in rewards) ...[
-              Text(r, style: const TextStyle(fontSize: 18)),
-              const SizedBox(width: 2),
-            ],
+          const Text('🪙', style: TextStyle(fontSize: 18)),
+          const SizedBox(width: 4),
+          Text(
+            '$coins',
+            style: const TextStyle(
+              color: AppColors.goldBright,
+              fontSize: 16,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
         ],
       ),
     );
@@ -344,12 +406,17 @@ class _LevelNode extends StatelessWidget {
     required this.level,
     required this.status,
     required this.justUnlocked,
+    required this.session,
     required this.onTap,
   });
 
   final LevelDef level;
   final LevelStatus status;
   final bool justUnlocked;
+
+  /// The live controller if a session is running here (foreground or auto-play
+  /// in the background); null otherwise. Drives the badge's play/pause overlay.
+  final HeadsUpController? session;
   final VoidCallback? onTap;
 
   @override
@@ -357,7 +424,7 @@ class _LevelNode extends StatelessWidget {
     final node = Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        _badge(),
+        _badgeWithIndicator(),
         const SizedBox(height: 6),
         _NameTag(
           name: botProfileFor(level.botProfileId).name,
@@ -384,6 +451,28 @@ class _LevelNode extends StatelessWidget {
               delay: 200.ms, duration: 900.ms, color: AppColors.goldBright);
     }
     return tappable;
+  }
+
+  /// The badge plus, when a session runs here, a corner indicator: a pulsing
+  /// green dot while a hand is being played, or a paused tag when auto-play hit
+  /// a spot it doesn't know.
+  Widget _badgeWithIndicator() {
+    final s = session;
+    if (s == null) return _badge();
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        _badge(),
+        Positioned(
+          right: -6,
+          top: -6,
+          child: ListenableBuilder(
+            listenable: s,
+            builder: (_, __) => _AutoBadge(controller: s),
+          ),
+        ),
+      ],
+    );
   }
 
   Widget _badge() {
@@ -432,8 +521,15 @@ class _LevelNode extends StatelessWidget {
       return Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const Icon(Icons.check_circle, color: AppColors.win, size: 26),
-          Text(level.rewardId, style: const TextStyle(fontSize: 16)),
+          const Icon(Icons.check_circle, color: AppColors.win, size: 24),
+          Text(
+            '🪙${level.coinReward}',
+            style: const TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.w800,
+              color: AppColors.goldBright,
+            ),
+          ),
         ],
       );
     }
@@ -454,6 +550,45 @@ class _LevelNode extends StatelessWidget {
             color: AppColors.goldBright, size: 20),
       ],
     );
+  }
+}
+
+/// The corner overlay on a level node whose trainer is running: a pulsing green
+/// dot ("a hand is being played here") or an amber paused tag ("auto-play hit a
+/// spot you haven't taught it — tap to decide").
+class _AutoBadge extends StatelessWidget {
+  const _AutoBadge({required this.controller});
+
+  final HeadsUpController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    if (controller.autoPaused) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+        decoration: BoxDecoration(
+          color: const Color(0xFFE08A2B),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: Colors.white, width: 1.5),
+        ),
+        child: const Icon(Icons.pause, size: 13, color: Colors.white),
+      );
+    }
+    if (controller.autoPlaying) {
+      return Container(
+        width: 16,
+        height: 16,
+        decoration: BoxDecoration(
+          color: AppColors.chipGreen,
+          shape: BoxShape.circle,
+          border: Border.all(color: Colors.white, width: 1.5),
+        ),
+      )
+          .animate(onPlay: (c) => c.repeat(reverse: true))
+          .scaleXY(begin: 0.7, end: 1.1, duration: 600.ms, curve: Curves.easeInOut)
+          .fadeIn(duration: 300.ms);
+    }
+    return const SizedBox.shrink();
   }
 }
 

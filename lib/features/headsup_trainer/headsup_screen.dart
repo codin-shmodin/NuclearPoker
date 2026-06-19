@@ -30,7 +30,13 @@ class HeadsUpScreen extends StatefulWidget {
     this.levelId,
     this.autoPlayUnlocked = false,
     this.lineStore,
+    this.controller,
   });
+
+  /// An externally-owned controller (the map keeps it alive so auto-play can
+  /// keep running after you leave the screen). When null, the screen creates and
+  /// owns its own.
+  final HeadsUpController? controller;
 
   final BotProfile profile;
   final int startingStack;
@@ -57,30 +63,46 @@ class HeadsUpScreen extends StatefulWidget {
 
 class _HeadsUpScreenState extends State<HeadsUpScreen> {
   late final HeadsUpController controller;
+  late final bool _ownsController;
 
   bool get _isLevel => widget.levelTitle != null;
 
   @override
   void initState() {
     super.initState();
-    controller = HeadsUpController(
-      profile: widget.profile,
-      startingStack: widget.startingStack,
-      autoPlayUnlocked: widget.autoPlayUnlocked,
-    );
-    final store = widget.lineStore;
-    final id = widget.levelId;
-    if (widget.autoPlayUnlocked && store != null && id != null) {
-      controller.onLineChanged = () => store.save(id, controller.savedLine);
-      store.load(id).then((line) {
-        if (mounted) controller.setSavedLine(line);
-      });
+    if (widget.controller != null) {
+      // Map-owned: it stays alive after we leave, so don't dispose or re-wire.
+      controller = widget.controller!;
+      _ownsController = false;
+      controller.screenAttached = true;
+    } else {
+      controller = HeadsUpController(
+        profile: widget.profile,
+        startingStack: widget.startingStack,
+        autoPlayUnlocked: widget.autoPlayUnlocked,
+      );
+      _ownsController = true;
+      final store = widget.lineStore;
+      final id = widget.levelId;
+      if (widget.autoPlayUnlocked && store != null && id != null) {
+        controller.onLineChanged = () => store.save(id, controller.savedLine);
+        store.load(id).then((line) {
+          if (mounted) controller.setSavedLine(line);
+        });
+      }
     }
   }
 
   @override
   void dispose() {
-    controller.dispose();
+    if (_ownsController) {
+      controller.dispose();
+    } else {
+      // Map-owned controller lives on; mark it detached so auto-play knows it's
+      // now running unattended and should reset itself on a bust.
+      controller.screenAttached = false;
+      controller.maybeResumeUnattended();
+    }
     super.dispose();
   }
 

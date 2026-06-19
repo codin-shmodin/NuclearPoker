@@ -40,8 +40,8 @@ void main() {
     ));
     await tester.pumpAndSettle();
 
-    // Level 1 cleared → reward in the tray; later levels still locked.
-    expect(find.text(kLevels.first.rewardId), findsWidgets);
+    // Level 1 cleared → its coin reward shows on the node; later still locked.
+    expect(find.text('🪙${kLevels.first.coinReward}'), findsWidgets);
     expect(find.byIcon(Icons.lock), findsWidgets);
     expect(find.textContaining('1 / ${kLevels.length}'), findsOneWidget);
   });

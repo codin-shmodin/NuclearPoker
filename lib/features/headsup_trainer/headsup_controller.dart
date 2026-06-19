@@ -150,6 +150,13 @@ class HeadsUpController extends ChangeNotifier {
   /// saved line is played out for them, hand after hand, at a watchable pace.
   bool autoPlayOn = false;
 
+  /// Whether a screen is currently showing this controller. The map keeps a
+  /// cleared level's controller alive after you leave the table, so auto-play
+  /// keeps running in the background. When detached, a bust (win *or* loss)
+  /// shouldn't freeze on the end-of-session screen with nobody watching — it
+  /// silently resets and plays on. Set by the screen on attach/detach.
+  bool screenAttached = false;
+
   /// The player's saved strategy for this level — grows each time they capture a
   /// hand with [saveLine]. Persisted by the screen via [onLineChanged].
   HumanLine savedLine;
@@ -201,6 +208,15 @@ class HeadsUpController extends ChangeNotifier {
     if (v) _maybeAutoStep(); // kick it off if it's already our turn
   }
 
+  /// Called by the screen when it detaches from a map-owned controller. If
+  /// auto-play left the session resting on a bust (so nothing else will fire
+  /// [_afterSettle]), restart it now that there's nobody watching the result.
+  void maybeResumeUnattended() {
+    if (autoPlayOn && !screenAttached && handOver && sessionOver) {
+      resetSession();
+    }
+  }
+
   /// Replace the saved line (used by the screen once it has loaded the level's
   /// line from disk).
   void setSavedLine(HumanLine line) {
@@ -223,6 +239,14 @@ class HeadsUpController extends ChangeNotifier {
 
   /// How many (spot, card) decisions the saved line currently covers.
   int get savedMoveCount => savedLine.count;
+
+  /// Auto-play is on and a hand is actively in motion (bot thinking, our saved
+  /// move stepping, or between hands) — drives the map badge's "playing" pulse.
+  bool get autoPlaying => autoPlayOn && !sessionOver && !isHumanTurn;
+
+  /// Auto-play is on but it hit a spot with no saved move and is waiting for a
+  /// human decision — drives the map badge's "paused" indicator.
+  bool get autoPaused => autoPlayOn && isHumanTurn;
 
   /// Commit the current hand's captured decisions into [savedLine] and persist.
   void saveLine() {
@@ -458,9 +482,16 @@ class HeadsUpController extends ChangeNotifier {
     // Hand finished cleanly under auto-play (no manual decision to save) → keep
     // the line rolling. If we *did* step in, _pendingLine isn't empty, so we
     // stop and let the player hit Save.
-    if (handOver && !sessionOver && _pendingLine.isEmpty) {
-      await Future<void>.delayed(_revealDelay);
-      if (autoPlayOn && handOver && !sessionOver) startHand();
+    if (handOver && _pendingLine.isEmpty) {
+      if (!sessionOver) {
+        await Future<void>.delayed(_revealDelay);
+        if (autoPlayOn && handOver && !sessionOver) startHand();
+      } else if (!screenAttached) {
+        // Running unattended (player left the table): a bust either way
+        // shouldn't stop the show — reset the whole session and play on.
+        await Future<void>.delayed(_revealDelay);
+        if (autoPlayOn && sessionOver && !screenAttached) resetSession();
+      }
     }
   }
 

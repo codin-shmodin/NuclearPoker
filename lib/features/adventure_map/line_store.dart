@@ -15,7 +15,12 @@ abstract class LineStore {
 
 /// The PoC store: one JSON blob per level in `shared_preferences`.
 class SharedPrefsLineStore implements LineStore {
-  static String _key(int levelId) => 'saved_line_$levelId';
+  SharedPrefsLineStore({this.namespace = ''});
+
+  /// Per-user key prefix, so each account's ranges are separate.
+  final String namespace;
+
+  String _key(int levelId) => '${namespace}saved_line_$levelId';
 
   @override
   Future<HumanLine> load(int levelId) async {
