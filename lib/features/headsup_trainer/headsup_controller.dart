@@ -202,6 +202,12 @@ class HeadsUpController extends ChangeNotifier {
   /// Whether the current hand's capture has already been saved.
   bool get lineSaved => _lineSaved;
 
+  /// True in the brief gap where auto-play has finished a hand cleanly and is
+  /// about to deal the next one itself. The screen uses this to suppress the
+  /// manual "Next Hand" button, which would otherwise flash for an instant.
+  bool get autoAdvancing =>
+      autoPlayOn && handOver && !sessionOver && _pendingLine.isEmpty;
+
   /// How many (spot, card) decisions the saved line currently covers.
   int get savedMoveCount => savedLine.count;
 
@@ -489,6 +495,25 @@ class HeadsUpController extends ChangeNotifier {
   /// triggers its second step.
   bool get botRaisesAfterCheck =>
       _botRange.any((v) => profile.moveAt(BetNode.checkedTo, v) == BotMove.pot);
+
+  /// Would the bot's bet after the human checks be all-in? If so the human
+  /// can't raise over it, so a "Check ▸ Raise" plan is impossible.
+  bool get botShovesAfterCheck =>
+      _botPotIsAllInAfter(const GameAction.check());
+
+  /// Would the bot's re-raise after the human pots be all-in? If so the human
+  /// can't raise again, so a "Raise ▸ Raise" plan is impossible.
+  bool get botShovesAfterPot => _botPotIsAllInAfter(const GameAction.bet(0));
+
+  /// Whether the bot's pot bet/raise would commit his whole stack in the spot
+  /// after the human plays [heroAction] now.
+  bool _botPotIsAllInAfter(GameAction heroAction) {
+    final s = _botStateAfter(heroAction);
+    if (!_botWillAct(s)) return false;
+    final me = s.seats[botSeat];
+    final v = _engine.buildView(s, botSeat);
+    return v.canBet && v.raiseTarget >= me.committed + me.stack;
+  }
 
   BetNode _nodeForSeat(int seatIndex) {
     final seat = state.seats[seatIndex];

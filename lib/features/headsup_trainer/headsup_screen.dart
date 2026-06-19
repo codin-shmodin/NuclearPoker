@@ -650,7 +650,9 @@ class _BottomPanel extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 18),
       height: twoRows ? 132 : 78,
       child: controller.handOver
-          ? _endControls()
+          // Auto-play is about to deal the next hand itself — don't flash a
+          // manual "Next Hand" button in the gap.
+          ? (controller.autoAdvancing ? _waiting() : _endControls())
           : live
               ? _layout(buttons, twoRows)
               : _waiting(),
@@ -817,8 +819,11 @@ class _BottomPanel extends StatelessWidget {
       dense: dense);
 
   List<Widget> _checkPlans(bool previewOn) => [
-        _planBtn(const CompoundPlan(ActionType.check, PlanReply.raise),
-            'Check ▸ Raise', AppColors.potPurpleDeep, previewOn),
+        // If the bot's bet would be all-in, you can't raise over it — drop the
+        // "▸ Raise" plan.
+        if (!controller.botShovesAfterCheck)
+          _planBtn(const CompoundPlan(ActionType.check, PlanReply.raise),
+              'Check ▸ Raise', AppColors.potPurpleDeep, previewOn),
         _planBtn(const CompoundPlan(ActionType.check, PlanReply.call),
             'Check ▸ Call', AppColors.chipGreen, previewOn),
         _planBtn(const CompoundPlan(ActionType.check, PlanReply.fold),
@@ -826,8 +831,11 @@ class _BottomPanel extends StatelessWidget {
       ];
 
   List<Widget> _raisePlans(bool previewOn) => [
-        _planBtn(const CompoundPlan(ActionType.bet, PlanReply.raise),
-            'Raise ▸ Raise', AppColors.potPurpleDeep, previewOn),
+        // If the bot's re-raise would be all-in, you can't raise again — drop
+        // the "▸ Raise" plan.
+        if (!controller.botShovesAfterPot)
+          _planBtn(const CompoundPlan(ActionType.bet, PlanReply.raise),
+              'Raise ▸ Raise', AppColors.potPurpleDeep, previewOn),
         _planBtn(const CompoundPlan(ActionType.bet, PlanReply.call),
             'Raise ▸ Call', AppColors.chipGreen, previewOn),
         _planBtn(const CompoundPlan(ActionType.bet, PlanReply.fold),
