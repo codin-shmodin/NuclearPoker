@@ -14,6 +14,23 @@ import '../../engine/players/bot_profile.dart';
 import '../../engine/players/range_bot.dart' show BotMove;
 import 'human_line.dart';
 
+/// Street-relative name of an aggressive action by how deep it is in the round:
+/// the first aggressive action is a "bet", the next a "raise", then "3-bet",
+/// "4-bet", … The action itself is always a pot-sized wager — only its *name*
+/// changes with position, which is why the bare "pot" is reserved for the action
+/// button and the range tables (where placement already implies the type).
+String aggroVerb(int index) {
+  if (index <= 1) return 'bet';
+  if (index == 2) return 'raise';
+  return '$index-bet';
+}
+
+/// [aggroVerb] capitalised for button labels: Bet / Raise / 3-Bet.
+String aggroVerbCap(int index) {
+  final v = aggroVerb(index);
+  return v[0].toUpperCase() + v.substring(1);
+}
+
 /// How a rank is coloured on the range bar. `check/fold/call/pot/allIn` are the
 /// bot's *action* with that card (`allIn` is a pot bet/raise that commits its
 /// whole stack — a deeper purple than `pot`); `shown` is the neutral grey "cards
@@ -703,6 +720,23 @@ class HeadsUpController extends ChangeNotifier {
     return BetNode.facingReraise;
   }
 
+  /// Depth of the human's *next* aggressive action: 1 = a first bet, 2 = a
+  /// raise, 3 = a 3-bet, … (one past the aggressive actions already made).
+  int get heroAggroIndex => state.raiseCount + 1;
+
+  /// Depth of the action a player faces at a facing [node] (what the *other*
+  /// player just did): facing a bet = 1, a raise = 2, a 3-bet = 3.
+  int _facedIndex(BetNode node) {
+    switch (node) {
+      case BetNode.facingRaise:
+        return 2;
+      case BetNode.facingReraise:
+        return 3;
+      default:
+        return 1; // facingBet (and non-facing fallbacks)
+    }
+  }
+
   GameAction _moveAction(BotMove move, GameView view) {
     switch (move) {
       case BotMove.pot:
@@ -743,7 +777,9 @@ class HeadsUpController extends ChangeNotifier {
     if (state.toAct == botSeat) {
       final node = _botNode();
       final facing = node != BetNode.open && node != BetNode.checkedTo;
-      rangeTitle = facing ? 'Facing your raise I would:' : 'My range';
+      rangeTitle = facing
+          ? 'Facing your ${aggroVerb(_facedIndex(node))} I would:'
+          : 'My range';
       botSpeech = facing ? _botFacingSpeech(node) : _botOpenSpeech(node);
       rangeCells = _cellsForBotDecision(state);
       statusMessage = '${profile.name} is thinking…';
@@ -776,7 +812,7 @@ class HeadsUpController extends ChangeNotifier {
     if (action == ActionType.bet) {
       final s = _botStateAfter(const GameAction.bet(0));
       if (_botWillAct(s)) {
-        rangeTitle = 'If you POT, ${profile.name} will:';
+        rangeTitle = 'If you ${aggroVerb(heroAggroIndex)}, ${profile.name} will:';
         botSpeech = _facingSpeech(_nodeAt(s, botSeat));
       } else {
         rangeTitle = "${profile.name}'s range";
@@ -810,9 +846,15 @@ class HeadsUpController extends ChangeNotifier {
   // ---- Advanced plan range view -------------------------------------------
 
   void _buildPlanRange(CompoundPlan plan) {
-    final first = plan.first == ActionType.check ? 'check' : 'raise';
+    // Our first aggressive action's depth, and our reply's (two deeper: the bot
+    // re-raises in between). After a check we'd be facing the bot's first bet,
+    // so our reply there is a plain raise (depth 2).
+    final firstIdx = heroAggroIndex;
+    final first =
+        plan.first == ActionType.check ? 'check' : aggroVerb(firstIdx);
+    final secondIdx = plan.first == ActionType.check ? 2 : firstIdx + 2;
     final second = plan.second == PlanReply.raise
-        ? 'raise'
+        ? aggroVerb(secondIdx)
         : plan.second == PlanReply.call
             ? 'call'
             : 'fold';
@@ -1055,7 +1097,7 @@ class HeadsUpController extends ChangeNotifier {
     final betFrom = profile.nodes[node]?.betFrom ?? 99;
     final where = node == BetNode.checkedTo ? 'You checked — ' : "I'm first — ";
     if (betFrom > 14) return '${where}I just check this spot.';
-    return '${where}I pot ${_bare(betFrom)}+ and check the rest.';
+    return '${where}I bet ${_bare(betFrom)}+ and check the rest.';
   }
 
   String _botFacingSpeech(BetNode node) => _facingSpeech(node);
@@ -1076,12 +1118,15 @@ class HeadsUpController extends ChangeNotifier {
           break;
       }
     }
+    // The bot's re-raise is one level deeper than the action it faces.
+    final yourVerb = aggroVerb(_facedIndex(node));
+    final botVerb = aggroVerb(_facedIndex(node) + 1);
     final parts = <String>[];
-    if (pots.isNotEmpty) parts.add('shove ${_group(pots)}');
+    if (pots.isNotEmpty) parts.add('$botVerb ${_group(pots)}');
     if (calls.isNotEmpty) parts.add('call ${_group(calls)}');
     if (folds.isNotEmpty) parts.add('fold ${_group(folds)}');
     if (parts.isEmpty) return '…';
-    return 'If you pot, I ${_join(parts)}.';
+    return 'If you $yourVerb, I ${_join(parts)}.';
   }
 
   String _resultSpeech() {

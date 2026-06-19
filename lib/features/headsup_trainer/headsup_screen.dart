@@ -161,8 +161,10 @@ class _HeadsUpScreenState extends State<HeadsUpScreen> {
                               const SizedBox(width: 8),
                               EvBar(
                                 title: controller.hoveredPlan != null
-                                    ? _planEvTitle(controller.hoveredPlan!)
-                                    : _evTitle(controller.hoveredAction),
+                                    ? _planEvTitle(controller.hoveredPlan!,
+                                        controller.heroAggroIndex)
+                                    : _evTitle(controller.hoveredAction,
+                                        controller.heroAggroIndex),
                                 cells: controller.hoveredPlan != null
                                     ? controller.evCellsForCompound(
                                         controller.hoveredPlan!)
@@ -193,10 +195,10 @@ class _HeadsUpScreenState extends State<HeadsUpScreen> {
   }
 }
 
-String _evTitle(ActionType? action) {
+String _evTitle(ActionType? action, int aggroIndex) {
   switch (action) {
     case ActionType.bet:
-      return 'IMMEDIATE EV\nif you pot';
+      return 'IMMEDIATE EV\nif you ${aggroVerb(aggroIndex)}';
     case ActionType.call:
       return 'IMMEDIATE EV\nif you call';
     case ActionType.check:
@@ -208,10 +210,11 @@ String _evTitle(ActionType? action) {
   }
 }
 
-String _planEvTitle(CompoundPlan plan) {
-  final first = plan.first == ActionType.check ? 'check' : 'raise';
+String _planEvTitle(CompoundPlan plan, int aggroIndex) {
+  final first = plan.first == ActionType.check ? 'check' : aggroVerb(aggroIndex);
+  final secondIdx = plan.first == ActionType.check ? 2 : aggroIndex + 2;
   final second = plan.second == PlanReply.raise
-      ? 'raise'
+      ? aggroVerb(secondIdx)
       : plan.second == PlanReply.call
           ? 'call'
           : 'fold';
@@ -798,7 +801,7 @@ class _BottomPanel extends StatelessWidget {
     // behind your check.
     final raiseStep = view.canBet
         ? (controller.botRaisesAfterPot
-            ? _raisePlans(previewOn)
+            ? _raisePlans(view, previewOn)
             : [_simplePotBtn(view, previewOn, dense: true)])
         : const <Widget>[];
     if (facing) {
@@ -851,17 +854,25 @@ class _BottomPanel extends StatelessWidget {
             'Check ▸ Fold', AppColors.danger, previewOn),
       ];
 
-  List<Widget> _raisePlans(bool previewOn) => [
-        // If the bot's re-raise would be all-in, you can't raise again — drop
-        // the "▸ Raise" plan.
-        if (!controller.botShovesAfterPot)
-          _planBtn(const CompoundPlan(ActionType.bet, PlanReply.raise),
-              'Raise ▸ Raise', AppColors.potPurpleDeep, previewOn),
-        _planBtn(const CompoundPlan(ActionType.bet, PlanReply.call),
-            'Raise ▸ Call', AppColors.chipGreen, previewOn),
-        _planBtn(const CompoundPlan(ActionType.bet, PlanReply.fold),
-            'Raise ▸ Fold', AppColors.danger, previewOn),
-      ];
+  List<Widget> _raisePlans(view, bool previewOn) {
+    // Our aggressive action's name depends on how much betting already happened:
+    // first bet → "Bet", over a bet → "Raise", over a raise → "3-Bet". Our reply
+    // is two deeper (the bot re-raises in between).
+    final firstIdx = view.raiseCount + 1;
+    final first = aggroVerbCap(firstIdx);
+    final second = aggroVerbCap(firstIdx + 2);
+    return [
+      // If the bot's re-raise would be all-in, you can't raise again — drop
+      // the "▸ raise" plan.
+      if (!controller.botShovesAfterPot)
+        _planBtn(const CompoundPlan(ActionType.bet, PlanReply.raise),
+            '$first ▸ $second', AppColors.potPurpleDeep, previewOn),
+      _planBtn(const CompoundPlan(ActionType.bet, PlanReply.call),
+          '$first ▸ Call', AppColors.chipGreen, previewOn),
+      _planBtn(const CompoundPlan(ActionType.bet, PlanReply.fold),
+          '$first ▸ Fold', AppColors.danger, previewOn),
+    ];
+  }
 
   Widget _simpleBtn(String label, Color color, ActionType type,
           VoidCallback onConfirm, bool previewOn,
