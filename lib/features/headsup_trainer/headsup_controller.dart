@@ -15,17 +15,17 @@ import '../../engine/players/range_bot.dart' show BotMove;
 import 'human_line.dart';
 
 /// Street-relative name of an aggressive action by how deep it is in the round:
-/// the first aggressive action is a "bet", the next a "raise", then "3-bet",
-/// "4-bet", … The action itself is always a pot-sized wager — only its *name*
-/// changes with position, which is why the bare "pot" is reserved for the action
-/// button and the range tables (where placement already implies the type).
+/// the first aggressive action is a "bet", the next a "3-bet", then "4-bet",
+/// "5-bet", … (there is no "raise" — the second wager is already a 3-bet). The
+/// action itself is always a pot-sized wager — only its *name* changes with
+/// depth, which is why the bare "pot" is reserved for the action button and the
+/// range tables (where placement already implies the type).
 String aggroVerb(int index) {
   if (index <= 1) return 'bet';
-  if (index == 2) return 'raise';
-  return '$index-bet';
+  return '${index + 1}-bet';
 }
 
-/// [aggroVerb] capitalised for button labels: Bet / Raise / 3-Bet.
+/// [aggroVerb] capitalised for button labels: Bet / 3-bet / 4-bet.
 String aggroVerbCap(int index) {
   final v = aggroVerb(index);
   return v[0].toUpperCase() + v.substring(1);
@@ -244,6 +244,12 @@ class HeadsUpController extends ChangeNotifier {
 
   int get buttonSeat => state.button;
 
+  /// Which seat the human is in this hand: the button (small blind) acts first
+  /// → BTN; otherwise BB. Saved-line decisions are keyed by this so the two
+  /// positions never share a range.
+  LinePosition get humanPosition =>
+      state.button == humanSeat ? LinePosition.btn : LinePosition.bb;
+
   void toggleEv(bool v) {
     evOn = v;
     notifyListeners();
@@ -426,7 +432,7 @@ class HeadsUpController extends ChangeNotifier {
     final card = seats[humanSeat].card;
     if (card == null || state.toAct != humanSeat) return;
     _pendingLine.record(
-        _nodeForSeat(humanSeat), card.rank.value, _moveOf(action));
+        humanPosition, _nodeForSeat(humanSeat), card.rank.value, _moveOf(action));
   }
 
   BotMove _moveOf(GameAction action) {
@@ -501,7 +507,7 @@ class HeadsUpController extends ChangeNotifier {
 
     if (autoPlayUnlocked) {
       _pendingLine.record(
-          _nodeForSeat(humanSeat), v, _moveOf(firstAction));
+          humanPosition, _nodeForSeat(humanSeat), v, _moveOf(firstAction));
     }
 
     // Branch A: our first action, then the bot answers passively → showdown.
@@ -518,7 +524,8 @@ class HeadsUpController extends ChangeNotifier {
         if (sim.phase == HandPhase.betting && sim.toAct == humanSeat) {
           final node2 = _nodeAt(sim, humanSeat);
           if (autoPlayUnlocked) {
-            _pendingLine.record(node2, v, _secondMove(plan.second));
+            _pendingLine.record(
+                humanPosition, node2, v, _secondMove(plan.second));
           }
           lines.add(PlanLine(
             [
@@ -667,7 +674,9 @@ class HeadsUpController extends ChangeNotifier {
     if (!autoPlayOn || !isHumanTurn) return;
     final card = seats[humanSeat].card;
     final node = _nodeForSeat(humanSeat);
-    final move = card == null ? null : savedLine.moveAt(node, card.rank.value);
+    final move = card == null
+        ? null
+        : savedLine.moveAt(humanPosition, node, card.rank.value);
     if (move == null) {
       statusMessage = 'Auto-play: no saved move for this spot — your call.';
       notifyListeners();

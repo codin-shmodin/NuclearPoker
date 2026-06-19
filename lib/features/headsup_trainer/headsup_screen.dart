@@ -848,11 +848,12 @@ class _BottomPanel extends StatelessWidget {
       dense: dense);
 
   List<Widget> _checkPlans(bool previewOn) => [
-        // If the bot's bet would be all-in, you can't raise over it — drop the
-        // "▸ Raise" plan.
+        // After you check the bot bets (the 1st aggressive action), so your
+        // raise over it is the 2nd — a 3-bet. If that bet would be all-in you
+        // can't raise over it, so drop the plan.
         if (!controller.botShovesAfterCheck)
           _planBtn(const CompoundPlan(ActionType.check, PlanReply.raise),
-              'Check ▸ Raise', AppColors.potPurpleDeep, previewOn),
+              'Check ▸ ${aggroVerbCap(2)}', AppColors.potPurpleDeep, previewOn),
         _planBtn(const CompoundPlan(ActionType.check, PlanReply.call),
             'Check ▸ Call', AppColors.chipGreen, previewOn),
         _planBtn(const CompoundPlan(ActionType.check, PlanReply.fold),

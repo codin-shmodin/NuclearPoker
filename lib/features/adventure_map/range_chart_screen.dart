@@ -9,17 +9,15 @@ import '../headsup_trainer/human_line.dart';
 import 'level.dart';
 import 'line_store.dart';
 
-/// Which position the row describes — the two halves of the auto-range chart.
-enum _Section { btn, bb }
-
 /// Your options at a "passive" node (open / checked to you): check, or open the
-/// betting. At a "facing" node you can fold, call, or raise.
+/// betting. At a "facing" node you can fold, call, or re-raise (pot).
 const List<BotMove> _passiveMoves = [BotMove.check, BotMove.pot];
 const List<BotMove> _facingMoves = [BotMove.fold, BotMove.call, BotMove.pot];
 
 /// The facing node you reach when the action you're now answering is the
-/// [depth]-th aggressive action of the round (1 = a bet, 2 = a raise, 3+ = a
-/// re-raise). Deeper than a re-raise all folds back into [BetNode.facingReraise].
+/// [depth]-th aggressive action of the round (1 = a bet, 2 = a 3-bet, 3+ = a
+/// 4-bet+). Deeper than that all folds back into [BetNode.facingReraise] — the
+/// engine only models three facing buckets, so the chart matches it.
 BetNode _facingNode(int depth) => depth <= 1
     ? BetNode.facingBet
     : depth == 2
@@ -27,10 +25,11 @@ BetNode _facingNode(int depth) => depth <= 1
         : BetNode.facingReraise;
 
 /// The editable view of the player's own *auto-range* — the saved [HumanLine]
-/// the trainer auto-plays for them. Two sections (BTN / BB) of 13 rank rows.
-/// Tap a square to cycle your action (it auto-saves); tap a dim arrow to add the
-/// next "and the opponent raises again" step. Reached from the map's chart
-/// button, one tab per level/opponent.
+/// the trainer auto-plays for them. Two sections (BTN / BB), keyed by position
+/// so the two seats never share a range. Tap a square to cycle your action (it
+/// auto-saves); tap an arrow to reveal (or hide) the opponent's next aggressive
+/// action and your reply to it. Reached from the map's chart button, one tab per
+/// level/opponent.
 class RangeChartScreen extends StatefulWidget {
   const RangeChartScreen({super.key, required this.lineStore});
 
@@ -45,13 +44,11 @@ class _RangeChartScreenState extends State<RangeChartScreen> {
   bool _loading = true;
   int _selected = kLevels.first.id;
 
-  /// How many *optional* (opponent-raises-again) steps the player has revealed
-  /// for a given row, keyed by "section_rank_branch".
-  final Map<String, int> _revealed = {};
-
-  /// In the BB section, which branch a row currently shows: true = the opponent
-  /// opened the betting (facing a bet), false = the opponent checked to you.
-  final Map<String, bool> _bbBet = {};
+  /// Which optional (opponent-acts-again) steps the player has explicitly
+  /// toggled on/off, keyed by "position_node_rank". When absent, a step defaults
+  /// to *shown if it already holds a saved move* — so captured lines are visible
+  /// without hunting, while empty BTN continuations stay collapsed by default.
+  final Map<String, bool> _armed = {};
 
   @override
   void initState() {
@@ -70,15 +67,31 @@ class _RangeChartScreenState extends State<RangeChartScreen> {
 
   Future<void> _save() => widget.lineStore.save(_selected, _line);
 
-  void _cycle(BetNode node, int rv, List<BotMove> moves) {
+  String _armKey(LinePosition pos, BetNode node, int rv) =>
+      '${pos.name}_${node.name}_$rv';
+
+  bool _isArmed(LinePosition pos, BetNode node, int rv) =>
+      _armed[_armKey(pos, node, rv)] ?? (_line.moveAt(pos, node, rv) != null);
+
+  /// Toggle an opponent-action arrow. Turning it *off* discards the plan behind
+  /// it (clears that reply) so what you see is what auto-play will do.
+  void _toggleArm(LinePosition pos, BetNode node, int rv, bool armed) {
+    setState(() {
+      _armed[_armKey(pos, node, rv)] = !armed;
+      if (armed) _line.clear(pos, node, rv);
+    });
+    if (armed) _save();
+  }
+
+  void _cycle(LinePosition pos, BetNode node, int rv, List<BotMove> moves) {
     final cycle = <BotMove?>[null, ...moves];
-    final i = cycle.indexOf(_line.moveAt(node, rv));
+    final i = cycle.indexOf(_line.moveAt(pos, node, rv));
     final next = cycle[(i + 1) % cycle.length];
     setState(() {
       if (next == null) {
-        _line.clear(node, rv);
+        _line.clear(pos, node, rv);
       } else {
-        _line.record(node, rv, next);
+        _line.record(pos, node, rv, next);
       }
     });
     _save();
@@ -110,8 +123,8 @@ class _RangeChartScreenState extends State<RangeChartScreen> {
                         padding: const EdgeInsets.fromLTRB(12, 4, 12, 24),
                         child: Column(
                           children: [
-                            _sectionCard(_Section.btn),
-                            _sectionCard(_Section.bb),
+                            _sectionCard(LinePosition.btn),
+                            _sectionCard(LinePosition.bb),
                             const _ChartLegend(),
                           ],
                         ),
@@ -163,9 +176,11 @@ class _RangeChartScreenState extends State<RangeChartScreen> {
 
   // ---- Section + rows -----------------------------------------------------
 
-  Widget _sectionCard(_Section section) {
+  Widget _sectionCard(LinePosition pos) {
     final ranks = Rank.values.reversed.toList(); // A → 2
-    final isBtn = section == _Section.btn;
+    final isBtn = pos == LinePosition.btn;
+    final linesPerRank = isBtn ? 1 : 2;
+    final groupH = _kRowH * linesPerRank;
     return Container(
       margin: const EdgeInsets.only(bottom: 14),
       padding: const EdgeInsets.all(12),
@@ -188,8 +203,10 @@ class _RangeChartScreenState extends State<RangeChartScreen> {
           ),
           Text(
             isBtn
-                ? 'You act first — pick your action, then answer each raise.'
-                : 'The opponent acts first — tap the arrow to set what they do.',
+                ? 'You act first. Set your action, then tap an arrow to plan for '
+                    "the opponent's reply."
+                : 'The opponent acts first — two lines per hand: they check (top) '
+                    'or they bet (bottom).',
             style: const TextStyle(
               fontSize: 10.5,
               fontWeight: FontWeight.w600,
@@ -203,17 +220,21 @@ class _RangeChartScreenState extends State<RangeChartScreen> {
               Column(
                 children: [
                   for (final r in ranks)
-                    SizedBox(
+                    Container(
                       width: 22,
-                      height: _kRowH,
-                      child: Center(
-                        child: Text(
-                          r.label,
-                          style: const TextStyle(
-                            fontSize: 14,
-                            fontWeight: FontWeight.w900,
-                            color: AppColors.textPrimary,
-                          ),
+                      height: groupH,
+                      alignment: Alignment.center,
+                      decoration: const BoxDecoration(
+                        border: Border(
+                          bottom: BorderSide(color: Colors.white10),
+                        ),
+                      ),
+                      child: Text(
+                        r.label,
+                        style: const TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w900,
+                          color: AppColors.textPrimary,
                         ),
                       ),
                     ),
@@ -227,9 +248,22 @@ class _RangeChartScreenState extends State<RangeChartScreen> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       for (final r in ranks)
-                        SizedBox(
-                          height: _kRowH,
-                          child: Row(children: _segments(section, r.value)),
+                        Container(
+                          decoration: const BoxDecoration(
+                            border: Border(
+                              bottom: BorderSide(color: Colors.white10),
+                            ),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              for (final line in _linesFor(pos, r.value))
+                                SizedBox(
+                                  height: _kRowH,
+                                  child: Row(children: line),
+                                ),
+                            ],
+                          ),
                         ),
                     ],
                   ),
@@ -242,75 +276,88 @@ class _RangeChartScreenState extends State<RangeChartScreen> {
     );
   }
 
-  /// Build one row left→right: your squares interleaved with opponent arrows,
-  /// walking the betting line and stopping where it resolves (you call/fold, or
-  /// the opponent's next raise hasn't been revealed yet).
-  List<Widget> _segments(_Section section, int rv) {
-    final out = <Widget>[];
-    int aggr; // aggressive actions taken before the square about to be added
-    BetNode node;
+  List<List<Widget>> _linesFor(LinePosition pos, int rv) =>
+      pos == LinePosition.btn
+          ? [_btnLine(rv)]
+          : [_bbCheckLine(rv), _bbBetLine(rv)];
 
-    if (section == _Section.btn) {
-      out.add(_cell(BetNode.open, rv, _passiveMoves, 1));
-      final youChecked = _line.moveAt(BetNode.open, rv) == BotMove.check;
-      // The opponent always gets to act; this first arrow is always live.
-      aggr = youChecked ? 1 : 2; // they bet (1) if you checked, else raise (2)
-      out.add(_arrow(active: true, blue: false, label: aggroVerb(aggr)));
-      node = _facingNode(aggr);
-      out.add(_cell(node, rv, _facingMoves, aggr + 1));
-    } else {
-      final betKey = '$rv';
-      final bet = _bbBet[betKey] ?? true;
-      out.add(_arrow(
-        active: bet,
-        blue: !bet,
-        label: bet ? aggroVerb(1) : 'check',
-        onTap: () => setState(() => _bbBet[betKey] = !bet),
-      ));
-      if (bet) {
-        aggr = 1;
-        node = BetNode.facingBet;
-        out.add(_cell(node, rv, _facingMoves, aggr + 1));
-      } else {
-        aggr = 0;
-        node = BetNode.checkedTo;
-        out.add(_cell(node, rv, _passiveMoves, aggr + 1));
-      }
-    }
-
-    // Optional deeper steps: only while you keep raising (pot) does the
-    // opponent get another raise to answer.
-    final branch = section == _Section.bb ? (_bbBet['$rv'] ?? true) : true;
-    final key = '${section.name}_${rv}_$branch';
-    final revealed = _revealed[key] ?? 0;
-    var optional = 0;
-    while (true) {
-      if (_line.moveAt(node, rv) != BotMove.pot) break; // you didn't raise
-      if (node == BetNode.facingReraise) break; // deepest node we model
-      final botDepth = aggr + 2; // your raise = aggr+1, their re-raise = aggr+2
-      final nextNode = _facingNode(botDepth);
-      final hasData = _line.moveAt(nextNode, rv) != null;
-      final active = optional < revealed || hasData;
-      final idx = optional;
-      out.add(_arrow(
-        active: active,
-        blue: false,
-        label: aggroVerb(botDepth),
-        onTap: active ? null : () => setState(() => _revealed[key] = idx + 1),
-      ));
-      if (!active) break; // dim arrow — wait for the player to reveal it
-      aggr = botDepth;
-      node = nextNode;
-      out.add(_cell(node, rv, _facingMoves, aggr + 1));
-      optional++;
+  /// BTN row: your open square, then a *toggleable* arrow for the opponent's
+  /// reply (off by default), then your facing square and any deeper re-raises.
+  List<Widget> _btnLine(int rv) {
+    const pos = LinePosition.btn;
+    final out = <Widget>[_cell(pos, BetNode.open, rv, _passiveMoves, 1)];
+    final youChecked = _line.moveAt(pos, BetNode.open, rv) == BotMove.check;
+    // If you checked, they bet (1st aggressive action); if you bet, they 3-bet.
+    final aggr = youChecked ? 1 : 2;
+    final node = _facingNode(aggr);
+    final armed = _isArmed(pos, node, rv);
+    out.add(_ArrowTag(
+      label: aggroVerb(aggr),
+      color: AppColors.potPurple,
+      filled: armed,
+      onTap: () => _toggleArm(pos, node, rv, armed),
+    ));
+    if (armed) {
+      out.add(_cell(pos, node, rv, _facingMoves, aggr + 1));
+      _appendDeeper(out, pos, rv, node, aggr);
     }
     return out;
   }
 
-  Widget _cell(BetNode node, int rv, List<BotMove> moves, int aggrIndex) {
-    final move = _line.moveAt(node, rv);
+  /// BB, opponent-checks line: a fixed (non-toggleable) check arrow, then your
+  /// reply at [BetNode.checkedTo], then any deeper re-raises if you bet.
+  List<Widget> _bbCheckLine(int rv) {
+    const pos = LinePosition.bb;
+    final out = <Widget>[
+      const _ArrowTag(label: 'check', color: AppColors.chipBlue, filled: true),
+      _cell(pos, BetNode.checkedTo, rv, _passiveMoves, 1),
+    ];
+    _appendDeeper(out, pos, rv, BetNode.checkedTo, 0);
+    return out;
+  }
+
+  /// BB, opponent-bets line: a fixed (non-toggleable) bet arrow, then your reply
+  /// at [BetNode.facingBet], then any deeper re-raises if you 3-bet.
+  List<Widget> _bbBetLine(int rv) {
+    const pos = LinePosition.bb;
+    final out = <Widget>[
+      _ArrowTag(label: aggroVerb(1), color: AppColors.potPurple, filled: true),
+      _cell(pos, BetNode.facingBet, rv, _facingMoves, 2),
+    ];
+    _appendDeeper(out, pos, rv, BetNode.facingBet, 1);
+    return out;
+  }
+
+  /// Append toggleable "opponent re-raises again" steps after your reply at
+  /// ([node], [aggr]). The opponent only gets another action while you keep
+  /// raising (your saved move is pot), so the chain stops where you call/fold or
+  /// hit the deepest modelled node.
+  void _appendDeeper(
+      List<Widget> out, LinePosition pos, int rv, BetNode node, int aggr) {
+    while (true) {
+      if (_line.moveAt(pos, node, rv) != BotMove.pot) break; // you didn't raise
+      if (node == BetNode.facingReraise) break; // deepest node we model
+      final botDepth = aggr + 2; // your raise = aggr+1, their re-raise = aggr+2
+      final nextNode = _facingNode(botDepth);
+      final armed = _isArmed(pos, nextNode, rv);
+      out.add(_ArrowTag(
+        label: aggroVerb(botDepth),
+        color: AppColors.potPurple,
+        filled: armed,
+        onTap: () => _toggleArm(pos, nextNode, rv, armed),
+      ));
+      if (!armed) break; // dim arrow — wait for the player to reveal it
+      aggr = botDepth;
+      node = nextNode;
+      out.add(_cell(pos, node, rv, _facingMoves, aggr + 1));
+    }
+  }
+
+  Widget _cell(
+      LinePosition pos, BetNode node, int rv, List<BotMove> moves, int aggrIndex) {
+    final move = _line.moveAt(pos, node, rv);
     return GestureDetector(
-      onTap: () => _cycle(node, rv, moves),
+      onTap: () => _cycle(pos, node, rv, moves),
       child: Container(
         width: 52,
         height: 26,
@@ -336,50 +383,100 @@ class _RangeChartScreenState extends State<RangeChartScreen> {
       ),
     );
   }
+}
 
-  /// An opponent action between two of your squares. [active] arrows are filled
-  /// (purple for a bet/raise, blue for a check); a dim arrow is an unrevealed
-  /// "they raise again" step you can tap to add.
-  Widget _arrow({
-    required bool active,
-    required bool blue,
-    required String label,
-    VoidCallback? onTap,
-  }) {
-    final color = !active
-        ? Colors.white.withValues(alpha: 0.22)
-        : blue
-            ? AppColors.chipBlue
-            : AppColors.potPurple;
+const double _kRowH = 38;
+
+/// An opponent action between two of your squares, drawn as a filled right-
+/// pointing block arrow with the action name inside it. A [filled] arrow is part
+/// of the line (purple for a bet/3-bet, blue for a check); a hollow one is a
+/// collapsed "they raise again" step you can tap to reveal. [onTap] is null for
+/// the BB scenario arrows, which are fixed.
+class _ArrowTag extends StatelessWidget {
+  const _ArrowTag({
+    required this.label,
+    required this.color,
+    required this.filled,
+    this.onTap,
+  });
+
+  final String label;
+  final Color color;
+  final bool filled;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final fill = filled ? color : Colors.transparent;
+    final stroke = filled ? color : Colors.white.withValues(alpha: 0.30);
+    final textColor =
+        filled ? Colors.white : Colors.white.withValues(alpha: 0.55);
     return GestureDetector(
       onTap: onTap,
       behavior: HitTestBehavior.opaque,
-      child: SizedBox(
-        width: 34,
-        height: _kRowH,
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(Icons.arrow_right_alt, color: color, size: 22),
-            Text(
-              label,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 6),
+        child: CustomPaint(
+          painter: _ArrowPainter(fill: fill, stroke: stroke),
+          child: Container(
+            width: 50,
+            height: 26,
+            alignment: Alignment.center,
+            padding: const EdgeInsets.only(right: 9), // room for the head
+            child: Text(
+              label.toUpperCase(),
               maxLines: 1,
               overflow: TextOverflow.visible,
+              softWrap: false,
               style: TextStyle(
-                fontSize: 7.5,
+                fontSize: 9,
                 height: 1,
-                fontWeight: FontWeight.w800,
-                color: color,
+                fontWeight: FontWeight.w900,
+                letterSpacing: 0.2,
+                color: textColor,
               ),
             ),
-          ],
+          ),
         ),
       ),
     );
   }
 }
 
-const double _kRowH = 38;
+/// Paints the block-arrow (a right-pointing pentagon): a fat body with a short
+/// triangular head, so the action label can sit inside it.
+class _ArrowPainter extends CustomPainter {
+  _ArrowPainter({required this.fill, required this.stroke});
+
+  final Color fill;
+  final Color stroke;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    const head = 9.0;
+    final path = Path()
+      ..moveTo(0, 2)
+      ..lineTo(size.width - head, 2)
+      ..lineTo(size.width, size.height / 2)
+      ..lineTo(size.width - head, size.height - 2)
+      ..lineTo(0, size.height - 2)
+      ..close();
+    if (fill.a != 0) {
+      canvas.drawPath(path, Paint()..color = fill);
+    }
+    canvas.drawPath(
+      path,
+      Paint()
+        ..color = stroke
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.5,
+    );
+  }
+
+  @override
+  bool shouldRepaint(_ArrowPainter old) =>
+      old.fill != fill || old.stroke != stroke;
+}
 
 class _LevelTab extends StatelessWidget {
   const _LevelTab(
@@ -433,7 +530,7 @@ Color _moveColor(BotMove move) {
 String _moveLabel(BotMove move, int aggrIndex) {
   switch (move) {
     case BotMove.pot:
-      return aggroVerbCap(aggrIndex).toUpperCase(); // BET / RAISE / 3-BET …
+      return aggroVerbCap(aggrIndex).toUpperCase(); // BET / 3-BET / 4-BET …
     case BotMove.call:
       return 'CALL';
     case BotMove.check:
@@ -458,7 +555,7 @@ class _ChartLegend extends StatelessWidget {
             spacing: 14,
             runSpacing: 6,
             children: [
-              _swatch(AppColors.potPurple, 'Bet / raise'),
+              _swatch(AppColors.potPurple, 'Bet / 3-bet'),
               _swatch(AppColors.chipGreen, 'Call'),
               _swatch(AppColors.chipBlue, 'Check'),
               _swatch(AppColors.danger, 'Fold'),
@@ -466,8 +563,8 @@ class _ChartLegend extends StatelessWidget {
           ),
           const SizedBox(height: 6),
           Text(
-            'Tap a square to set your action · tap a dim arrow to add the '
-            'opponent’s next raise',
+            'Tap a square to set your action · tap an arrow to reveal or hide '
+            'the opponent’s next bet',
             textAlign: TextAlign.center,
             style: TextStyle(
               fontSize: 10.5,

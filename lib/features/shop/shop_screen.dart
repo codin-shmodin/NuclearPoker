@@ -79,7 +79,13 @@ class _ShopScreenState extends State<ShopScreen> {
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(SnackBar(
-        content: Text(message),
+        content: Text(
+          message,
+          style: const TextStyle(
+            color: AppColors.textPrimary,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
         backgroundColor: AppColors.feltDark,
         behavior: SnackBarBehavior.floating,
         duration: const Duration(milliseconds: 1800),

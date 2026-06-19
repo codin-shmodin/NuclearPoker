@@ -304,12 +304,16 @@ class _AdventureMapScreenState extends State<AdventureMapScreen> {
                         total: kLevels.length,
                         coins: _coins,
                         onShop: _openShop,
-                        onRangeChart: () => Navigator.of(context).push(
-                          MaterialPageRoute<void>(
-                            builder: (_) =>
-                                RangeChartScreen(lineStore: _lineStore),
-                          ),
-                        ),
+                        // The auto-range chart only matters once you own Auto
+                        // Play (it edits the line auto-play runs).
+                        onRangeChart: _shop.ownsFeature(ShopFeature.autoPlay)
+                            ? () => Navigator.of(context).push(
+                                  MaterialPageRoute<void>(
+                                    builder: (_) =>
+                                        RangeChartScreen(lineStore: _lineStore),
+                                  ),
+                                )
+                            : null,
                         onLogout: widget.onLogout,
                       ),
                     ),
@@ -415,7 +419,7 @@ class _Hud extends StatelessWidget {
     required this.total,
     required this.coins,
     required this.onShop,
-    required this.onRangeChart,
+    this.onRangeChart,
     this.onLogout,
   });
 
@@ -423,7 +427,10 @@ class _Hud extends StatelessWidget {
   final int total;
   final int coins;
   final VoidCallback onShop;
-  final VoidCallback onRangeChart;
+
+  /// Opens the auto-range chart. Null (button hidden) until Auto Play is owned —
+  /// the chart only edits the line auto-play uses.
+  final VoidCallback? onRangeChart;
   final VoidCallback? onLogout;
 
   @override
@@ -487,12 +494,13 @@ class _Hud extends StatelessWidget {
             icon: const Icon(Icons.storefront_rounded,
                 color: AppColors.textPrimary),
           ),
-          IconButton(
-            tooltip: 'Your auto-range',
-            onPressed: onRangeChart,
-            icon: const Icon(Icons.grid_view_rounded,
-                color: AppColors.textPrimary),
-          ),
+          if (onRangeChart != null)
+            IconButton(
+              tooltip: 'Your auto-range',
+              onPressed: onRangeChart,
+              icon: const Icon(Icons.grid_view_rounded,
+                  color: AppColors.textPrimary),
+            ),
           if (onLogout != null)
             IconButton(
               tooltip: 'Log out',
