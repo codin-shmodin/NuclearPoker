@@ -29,4 +29,6 @@ client-side in Dart. Full rationale in `docs/stack-management.md`.
   with decisions that won't change much; pick a sensible default and mention it.
 - Read only the docs relevant to the current task. Don't read all docs "for good
   measure" — it burns tokens.
-- For each major feature or bug fix, commit and push the changes.
+- Commit every change. Only push when there are real changes to the source code
+  (e.g. a feature or bug fix), not on every commit — docs-only or trivial commits
+  can wait and be pushed alongside the next source change.
