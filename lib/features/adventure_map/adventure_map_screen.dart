@@ -5,6 +5,7 @@ import '../../theme/app_colors.dart';
 import '../headsup_trainer/bot_picker_screen.dart';
 import '../headsup_trainer/headsup_screen.dart';
 import 'level.dart';
+import 'line_store.dart';
 import 'progress_store.dart';
 
 /// The Candy-Crush-style level map — the app's home screen. A scrolling path of
@@ -24,6 +25,7 @@ class AdventureMapScreen extends StatefulWidget {
 
 class _AdventureMapScreenState extends State<AdventureMapScreen> {
   late final ProgressStore _store = widget.store ?? SharedPrefsProgressStore();
+  final LineStore _lineStore = SharedPrefsLineStore();
   final ScrollController _scroll = ScrollController();
 
   LevelProgress _progress = const LevelProgress.empty();
@@ -70,6 +72,10 @@ class _AdventureMapScreenState extends State<AdventureMapScreen> {
           profile: botProfileFor(level.botProfileId),
           startingStack: level.startingStack,
           levelTitle: level.title,
+          levelId: level.id,
+          // Save-line + auto-play unlock once you've already cleared this level.
+          autoPlayUnlocked: wasCompleted,
+          lineStore: _lineStore,
         ),
       ),
     );

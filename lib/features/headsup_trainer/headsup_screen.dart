@@ -8,6 +8,7 @@ import '../../engine/game/hand_state.dart';
 import '../../engine/game/seat.dart';
 import '../../engine/players/bot_profile.dart';
 import '../../theme/app_colors.dart';
+import '../adventure_map/line_store.dart';
 import '../quest_one_card/widgets/chip_stack_widget.dart';
 import '../quest_one_card/widgets/playing_card_widget.dart';
 import 'headsup_controller.dart';
@@ -25,6 +26,9 @@ class HeadsUpScreen extends StatefulWidget {
     required this.profile,
     this.startingStack = 50,
     this.levelTitle,
+    this.levelId,
+    this.autoPlayUnlocked = false,
+    this.lineStore,
   });
 
   final BotProfile profile;
@@ -33,6 +37,18 @@ class HeadsUpScreen extends StatefulWidget {
   /// When non-null, this screen is a map level: the top bar shows this title and
   /// busting the bot offers a "Level Complete" button that pops `true`.
   final String? levelTitle;
+
+  /// The level's id — the key the saved line is persisted under. Null in
+  /// free-play (no saving).
+  final int? levelId;
+
+  /// Whether the "automate your range" features (save-line + auto-play) are
+  /// available — true only on a level the player has already cleared.
+  final bool autoPlayUnlocked;
+
+  /// Where the saved line is loaded from / persisted to. Provided by the map for
+  /// unlocked levels; null in free-play.
+  final LineStore? lineStore;
 
   @override
   State<HeadsUpScreen> createState() => _HeadsUpScreenState();
@@ -49,7 +65,16 @@ class _HeadsUpScreenState extends State<HeadsUpScreen> {
     controller = HeadsUpController(
       profile: widget.profile,
       startingStack: widget.startingStack,
+      autoPlayUnlocked: widget.autoPlayUnlocked,
     );
+    final store = widget.lineStore;
+    final id = widget.levelId;
+    if (widget.autoPlayUnlocked && store != null && id != null) {
+      controller.onLineChanged = () => store.save(id, controller.savedLine);
+      store.load(id).then((line) {
+        if (mounted) controller.setSavedLine(line);
+      });
+    }
   }
 
   @override
@@ -536,6 +561,12 @@ class _TopBar extends StatelessWidget {
             ),
           ),
           const Spacer(),
+          if (controller.autoPlayUnlocked)
+            _MiniToggle(
+              label: 'Auto',
+              value: controller.autoPlayOn,
+              onChanged: controller.toggleAutoPlay,
+            ),
           _MiniToggle(
             label: 'EV',
             value: controller.evOn,
@@ -660,6 +691,24 @@ class _BottomPanel extends StatelessWidget {
       );
 
   Widget _endControls() {
+    final primary = _primaryEndButton();
+    // Offer to capture the hand you just played as a saved line (only on a
+    // cleared level, and only when there's a fresh decision to save).
+    if (controller.autoPlayUnlocked &&
+        (controller.canSaveLine || controller.lineSaved)) {
+      return Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Expanded(child: _SaveLineButton(controller: controller)),
+          const SizedBox(width: 8),
+          Expanded(child: primary),
+        ],
+      );
+    }
+    return primary;
+  }
+
+  Widget _primaryEndButton() {
     if (controller.sessionOver) {
       final won = controller.botBusted;
       // Map level + win → hand the victory back to the map to unlock the next.
@@ -905,6 +954,36 @@ class _FullButton extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+/// End-of-hand "capture this hand into my saved line" button. Greys out into a
+/// confirmation once tapped (the line is bound to the spots you just played).
+class _SaveLineButton extends StatelessWidget {
+  const _SaveLineButton({required this.controller});
+
+  final HeadsUpController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    final saved = controller.lineSaved;
+    return FilledButton(
+      style: FilledButton.styleFrom(
+        backgroundColor: saved ? AppColors.feltLight : AppColors.potPurpleDeep,
+        disabledBackgroundColor: AppColors.feltLight,
+        padding: const EdgeInsets.symmetric(vertical: 16),
+        shape:
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      ),
+      onPressed: saved ? null : controller.saveLine,
+      child: Text(
+        saved ? '✓ Line saved' : '💾 Save line',
+        textAlign: TextAlign.center,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: const TextStyle(fontWeight: FontWeight.w800),
+      ),
     );
   }
 }
