@@ -117,6 +117,9 @@ class HeadsUpController extends ChangeNotifier {
     int? seed,
     int startingStack = 50,
     this.autoPlayUnlocked = false,
+    this.rangeUnlocked = true,
+    this.evUnlocked = true,
+    this.advancedUnlocked = true,
     HumanLine? initialLine,
   })  : profile = profile ?? BotProfile.pro,
         savedLine = initialLine ?? HumanLine(),
@@ -144,6 +147,9 @@ class HeadsUpController extends ChangeNotifier {
     _engine = HandEngine(rules, _rng);
     _ev = ImmediateEvCalculator(_engine, this.profile,
         heroSeat: humanSeat, botSeat: botSeat);
+    // Owned-but-off vs. not-owned: the range bar defaults on once you've bought
+    // it, but stays hidden (and its toggle absent) until then.
+    rangeOn = rangeUnlocked;
     startHand();
   }
 
@@ -171,9 +177,18 @@ class HeadsUpController extends ChangeNotifier {
   bool advancedOn = false; // two-step "advanced" action plans
 
   /// Whether the "automate your range" features (save-line + auto-play) are
-  /// available here. Unlocked once the level has been beaten (see
-  /// docs/expansion-plans.md §1); always false in free-play.
+  /// available here. Unlocked by beating the level *or* by buying Auto Play in
+  /// the shop (see docs/expansion-plans.md §1); always false in free-play.
   final bool autoPlayUnlocked;
+
+  /// Shop-gated hint toggles. Each controls whether the matching toggle appears
+  /// in the trainer's top bar at all — the player owns none of these until they
+  /// buy them in the shop. Mutable so a purchase can light up a level that's
+  /// already running in the background (see [applyUnlocks]). Default true so
+  /// free-play / tests keep the full toolkit.
+  bool rangeUnlocked;
+  bool evUnlocked;
+  bool advancedUnlocked;
 
   /// The "Auto" toggle: when on (and a move is saved for the spot) the player's
   /// saved line is played out for them, hand after hand, at a watchable pace.
@@ -244,6 +259,19 @@ class HeadsUpController extends ChangeNotifier {
     hoveredAction = null;
     hoveredPlan = null;
     _rebuildRange();
+    notifyListeners();
+  }
+
+  /// Apply freshly-bought unlocks to a controller that's already alive (a level
+  /// auto-playing in the background when the purchase happened). Newly enabling
+  /// the range bar turns it on, matching a fresh controller's default.
+  void applyUnlocks({bool? range, bool? ev, bool? advanced}) {
+    if (range != null) {
+      if (range && !rangeUnlocked) rangeOn = true;
+      rangeUnlocked = range;
+    }
+    if (ev != null) evUnlocked = ev;
+    if (advanced != null) advancedUnlocked = advanced;
     notifyListeners();
   }
 

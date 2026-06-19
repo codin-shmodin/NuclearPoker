@@ -587,27 +587,32 @@ class _TopBar extends StatelessWidget {
             ),
           ),
           const Spacer(),
+          // Each toggle appears only once its feature is owned (bought in the
+          // shop, or — for Auto — also by beating the level).
           if (controller.autoPlayUnlocked)
             _MiniToggle(
               label: 'Auto',
               value: controller.autoPlayOn,
               onChanged: controller.toggleAutoPlay,
             ),
-          _MiniToggle(
-            label: 'EV',
-            value: controller.evOn,
-            onChanged: controller.toggleEv,
-          ),
-          _MiniToggle(
-            label: 'Range',
-            value: controller.rangeOn,
-            onChanged: controller.toggleRange,
-          ),
-          _MiniToggle(
-            label: 'Advanced',
-            value: controller.advancedOn,
-            onChanged: controller.toggleAdvanced,
-          ),
+          if (controller.evUnlocked)
+            _MiniToggle(
+              label: 'EV',
+              value: controller.evOn,
+              onChanged: controller.toggleEv,
+            ),
+          if (controller.rangeUnlocked)
+            _MiniToggle(
+              label: 'Range',
+              value: controller.rangeOn,
+              onChanged: controller.toggleRange,
+            ),
+          if (controller.advancedUnlocked)
+            _MiniToggle(
+              label: 'Advanced',
+              value: controller.advancedOn,
+              onChanged: controller.toggleAdvanced,
+            ),
         ],
       ),
     );

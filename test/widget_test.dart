@@ -3,6 +3,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:nuclear_poker/features/adventure_map/adventure_map_screen.dart';
 import 'package:nuclear_poker/features/adventure_map/level.dart';
 import 'package:nuclear_poker/features/adventure_map/progress_store.dart';
+import 'package:nuclear_poker/features/shop/shop_catalog.dart';
+import 'package:nuclear_poker/features/shop/shop_store.dart';
 
 /// In-memory store so the map widget test doesn't touch the prefs plugin.
 class FakeProgressStore implements ProgressStore {
@@ -16,13 +18,30 @@ class FakeProgressStore implements ProgressStore {
   Future<void> markComplete(int levelId) async => _ids.add(levelId);
 }
 
+/// In-memory shop store so the map widget test doesn't touch the prefs plugin.
+class FakeShopStore implements ShopStore {
+  FakeShopStore([ShopState? initial]) : _state = initial ?? const ShopState();
+  ShopState _state;
+
+  @override
+  Future<ShopState> load() async => _state;
+
+  @override
+  Future<void> markOwned(String itemId) async =>
+      _state = _state.withOwned(itemId);
+
+  @override
+  Future<void> recordAsafGrant() async => _state = _state.withAsafGrant();
+}
+
 String _nameOf(int index) => botProfileFor(kLevels[index].botProfileId).name;
 
 void main() {
   testWidgets('map shows the title and the first opponent by name',
       (tester) async {
     await tester.pumpWidget(MaterialApp(
-      home: AdventureMapScreen(store: FakeProgressStore()),
+      home: AdventureMapScreen(
+          store: FakeProgressStore(), shopStore: FakeShopStore()),
     ));
     await tester.pumpAndSettle();
 
@@ -36,7 +55,8 @@ void main() {
   testWidgets('locked levels show a padlock; cleared ones show the reward',
       (tester) async {
     await tester.pumpWidget(MaterialApp(
-      home: AdventureMapScreen(store: FakeProgressStore({1})),
+      home: AdventureMapScreen(
+          store: FakeProgressStore({1}), shopStore: FakeShopStore()),
     ));
     await tester.pumpAndSettle();
 
@@ -47,8 +67,12 @@ void main() {
   });
 
   testWidgets('tapping an unlocked node opens the trainer', (tester) async {
+    // Own the whole shop so the (now shop-gated) toggle bar is populated.
     await tester.pumpWidget(MaterialApp(
-      home: AdventureMapScreen(store: FakeProgressStore()),
+      home: AdventureMapScreen(
+        store: FakeProgressStore(),
+        shopStore: FakeShopStore(ShopState.allOwned),
+      ),
     ));
     await tester.pumpAndSettle();
 

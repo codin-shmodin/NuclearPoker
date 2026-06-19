@@ -5,6 +5,9 @@ import '../../identity/identity.dart';
 import '../../theme/app_colors.dart';
 import '../headsup_trainer/headsup_controller.dart';
 import '../headsup_trainer/headsup_screen.dart';
+import '../shop/shop_catalog.dart';
+import '../shop/shop_screen.dart';
+import '../shop/shop_store.dart';
 import 'level.dart';
 import 'line_store.dart';
 import 'progress_store.dart';
@@ -29,6 +32,7 @@ class AdventureMapScreen extends StatefulWidget {
   const AdventureMapScreen({
     super.key,
     this.store,
+    this.shopStore,
     this.identity = const Identity('guest', ''),
     this.showIntro = false,
     this.onLogout,
@@ -36,6 +40,9 @@ class AdventureMapScreen extends StatefulWidget {
 
   /// Injectable for tests; defaults to the on-device prefs store.
   final ProgressStore? store;
+
+  /// Injectable for tests; defaults to the on-device prefs shop store.
+  final ShopStore? shopStore;
 
   /// Who's playing — keys per-user storage and grants admin (all levels +
   /// auto-play).
@@ -55,6 +62,8 @@ class AdventureMapScreen extends StatefulWidget {
 class _AdventureMapScreenState extends State<AdventureMapScreen> {
   late final ProgressStore _store =
       widget.store ?? SharedPrefsProgressStore(namespace: widget.identity.namespace);
+  late final ShopStore _shopStore =
+      widget.shopStore ?? SharedPrefsShopStore(namespace: widget.identity.namespace);
   late final LineStore _lineStore =
       SharedPrefsLineStore(namespace: widget.identity.namespace);
   final ScrollController _scroll = ScrollController();
@@ -64,7 +73,20 @@ class _AdventureMapScreenState extends State<AdventureMapScreen> {
   final Map<int, HeadsUpController> _sessions = {};
 
   LevelProgress _progress = const LevelProgress.empty();
+  ShopState _shop = const ShopState();
   bool _loading = true;
+
+  bool get _isAdmin => widget.identity.isAdmin;
+
+  /// Coins earned by clearing levels (the spendable balance also folds in shop
+  /// purchases and "lazy Asaf" grants — see [coinBalance]).
+  int get _levelCoins => [
+        for (final l in kLevels)
+          if (_progress.isCompleted(l.id)) l.coinReward,
+      ].fold(0, (sum, c) => sum + c);
+
+  int get _coins =>
+      coinBalance(levelCoins: _levelCoins, shop: _shop, admin: _isAdmin);
 
   /// A level that just flipped locked→unlocked, to pop+glow once.
   int? _justUnlockedId;
@@ -88,13 +110,16 @@ class _AdventureMapScreenState extends State<AdventureMapScreen> {
   }
 
   Future<void> _load() async {
-    // Admin sees every level cleared (so all are unlocked + auto-play enabled).
-    final progress = widget.identity.isAdmin
+    // Admin sees every level cleared (so all are unlocked + auto-play enabled)
+    // and owns the whole shop for free.
+    final progress = _isAdmin
         ? LevelProgress({for (final l in kLevels) l.id})
         : await _store.load();
+    final shop = _isAdmin ? ShopState.allOwned : await _shopStore.load();
     if (!mounted) return;
     setState(() {
       _progress = progress;
+      _shop = shop;
       _loading = false;
     });
     if (widget.showIntro && !_introShown) {
@@ -156,12 +181,22 @@ class _AdventureMapScreenState extends State<AdventureMapScreen> {
     );
   }
 
-  /// Build (or reuse) the trainer controller for a level and load its line.
-  HeadsUpController _makeController(LevelDef level, bool unlocked) {
+  /// Auto-play (and the save-line capture it builds on) is available once the
+  /// level is beaten *or* the shop's Auto Play item is owned.
+  bool _autoUnlockedFor(LevelDef level) =>
+      _progress.isCompleted(level.id) ||
+      _shop.ownsFeature(ShopFeature.autoPlay);
+
+  /// Build (or reuse) the trainer controller for a level and load its line. The
+  /// hint toggles it exposes are gated on what's owned in the shop.
+  HeadsUpController _makeController(LevelDef level) {
     final c = HeadsUpController(
       profile: botProfileFor(level.botProfileId),
       startingStack: level.startingStack,
-      autoPlayUnlocked: unlocked,
+      autoPlayUnlocked: _autoUnlockedFor(level),
+      rangeUnlocked: _shop.ownsFeature(ShopFeature.rangometer),
+      evUnlocked: _shop.ownsFeature(ShopFeature.evSupercomputer),
+      advancedUnlocked: _shop.ownsFeature(ShopFeature.doubleAction),
     );
     c.onLineChanged = () => _lineStore.save(level.id, c.savedLine);
     _lineStore.load(level.id).then((line) => c.setSavedLine(line));
@@ -171,8 +206,7 @@ class _AdventureMapScreenState extends State<AdventureMapScreen> {
   Future<void> _launchLevel(LevelDef level) async {
     final wasCompleted = _progress.isCompleted(level.id);
     // Resume a backgrounded session if one is already running here.
-    final controller =
-        _sessions[level.id] ??= _makeController(level, wasCompleted);
+    final controller = _sessions[level.id] ??= _makeController(level);
     setState(() {}); // node starts reflecting the session
 
     final won = await Navigator.of(context).push<bool>(
@@ -182,8 +216,7 @@ class _AdventureMapScreenState extends State<AdventureMapScreen> {
           startingStack: level.startingStack,
           levelTitle: botProfileFor(level.botProfileId).name,
           levelId: level.id,
-          // Save-line + auto-play unlock once you've already cleared this level.
-          autoPlayUnlocked: wasCompleted,
+          autoPlayUnlocked: _autoUnlockedFor(level),
           lineStore: _lineStore,
           controller: controller,
         ),
@@ -215,6 +248,32 @@ class _AdventureMapScreenState extends State<AdventureMapScreen> {
     }
   }
 
+  /// Open the shop. Purchases flow back through [ShopScreen.onChanged]: we store
+  /// the new state and re-arm any live (background) sessions so a freshly-bought
+  /// hint lights up the next time you visit that level — without restarting it.
+  void _openShop() {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => ShopScreen(
+          store: _shopStore,
+          initial: _shop,
+          levelCoins: _levelCoins,
+          isAdmin: _isAdmin,
+          onChanged: (shop) {
+            setState(() => _shop = shop);
+            for (final c in _sessions.values) {
+              c.applyUnlocks(
+                range: _shop.ownsFeature(ShopFeature.rangometer),
+                ev: _shop.ownsFeature(ShopFeature.evSupercomputer),
+                advanced: _shop.ownsFeature(ShopFeature.doubleAction),
+              );
+            }
+          },
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -243,10 +302,8 @@ class _AdventureMapScreenState extends State<AdventureMapScreen> {
                       child: _Hud(
                         completed: _progress.completedLevelIds.length,
                         total: kLevels.length,
-                        coins: [
-                          for (final l in kLevels)
-                            if (_progress.isCompleted(l.id)) l.coinReward,
-                        ].fold(0, (sum, c) => sum + c),
+                        coins: _coins,
+                        onShop: _openShop,
                         onRangeChart: () => Navigator.of(context).push(
                           MaterialPageRoute<void>(
                             builder: (_) =>
@@ -357,6 +414,7 @@ class _Hud extends StatelessWidget {
     required this.completed,
     required this.total,
     required this.coins,
+    required this.onShop,
     required this.onRangeChart,
     this.onLogout,
   });
@@ -364,6 +422,7 @@ class _Hud extends StatelessWidget {
   final int completed;
   final int total;
   final int coins;
+  final VoidCallback onShop;
   final VoidCallback onRangeChart;
   final VoidCallback? onLogout;
 
@@ -420,8 +479,14 @@ class _Hud extends StatelessWidget {
               ],
             ),
           ),
-          _RewardTray(coins: coins),
-          const SizedBox(width: 4),
+          // Tapping the purse opens the shop too — it's where coins are spent.
+          GestureDetector(onTap: onShop, child: _RewardTray(coins: coins)),
+          IconButton(
+            tooltip: 'Shop',
+            onPressed: onShop,
+            icon: const Icon(Icons.storefront_rounded,
+                color: AppColors.textPrimary),
+          ),
           IconButton(
             tooltip: 'Your auto-range',
             onPressed: onRangeChart,
