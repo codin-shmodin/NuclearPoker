@@ -269,7 +269,7 @@ class _Hud extends StatelessWidget {
                         fontSize: 22,
                         fontWeight: FontWeight.w900,
                         letterSpacing: 1.5,
-                        color: AppColors.goldBright,
+                        color: AppColors.goldDeep,
                       ),
                     ),
                     Text(
