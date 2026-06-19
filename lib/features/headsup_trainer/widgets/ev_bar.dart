@@ -9,8 +9,8 @@ import '../headsup_controller.dart';
 /// where your action hands the decision back to you (we don't guess your next
 /// move). Colour runs bright red (lose a lot) → grey (≈0) → bright green (win a
 /// lot). Each cell is labelled by the kind of spot it is (Value / Fold Equity /
-/// Paid Off / …). The footer shows the average across the known (non-"?") cards,
-/// but hides it when most of the range answers aggressively (mostly "?").
+/// Paid Off / …). The footer shows the average net result, but only when every
+/// card in the range resolves — if even one card is "?", the average is "?" too.
 class EvBar extends StatelessWidget {
   const EvBar({super.key, required this.title, required this.cells});
 
@@ -31,12 +31,12 @@ class EvBar extends StatelessWidget {
     final active = cells.where((c) => c.active).toList();
     final anyActive = active.isNotEmpty;
     final known = active.where((c) => !c.unknown).toList();
-    // When most of the bot's range answers aggressively (re-raise / bet), most
-    // cells are "?", so the Avg would be the mean of a tiny leftover sample —
-    // misleading. In that spot we hide it: there's no honest average to show.
-    final mostlyAggressive =
-        anyActive && (active.length - known.length) * 2 > active.length;
-    final average = (known.isEmpty || mostlyAggressive)
+    // If even one card in the bot's range is "?" (our action hands the decision
+    // back to us, so its EV is unknown), there's no honest average to show — the
+    // mean of only the resolved cards would misrepresent the spot. So we show
+    // "Avg ?" whenever any active card is unknown.
+    final anyUnknown = active.length != known.length;
+    final average = (known.isEmpty || anyUnknown)
         ? null
         : known.fold<int>(0, (sum, c) => sum + c.ev) / known.length;
     return Container(
@@ -81,9 +81,7 @@ class EvBar extends StatelessWidget {
           ),
           if (anyActive) ...[
             const SizedBox(height: 4),
-            // When the bot can raise the ball back to us (most cells are "?"),
-            // there's no honest average to show — so we mark it "?" rather than
-            // averaging a misleading sliver of the range.
+            // Any "?" card means we can't honestly average the line — show "?".
             Text(
               average != null ? 'Avg ${_signed(average)}' : 'Avg ?',
               style: const TextStyle(

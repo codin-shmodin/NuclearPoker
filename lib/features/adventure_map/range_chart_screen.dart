@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../engine/cards/rank.dart';
-import '../../engine/players/bot_profile.dart' show BetNode;
+import '../../engine/players/bot_profile.dart' show BetNode, BotProfile;
 import '../../engine/players/range_bot.dart' show BotMove;
 import '../../theme/app_colors.dart';
 import '../headsup_trainer/human_line.dart';
@@ -61,6 +61,8 @@ class _RangeChartScreenState extends State<RangeChartScreen> {
   @override
   Widget build(BuildContext context) {
     final line = _lines[_selected] ?? HumanLine();
+    final level = kLevels.firstWhere((l) => l.id == _selected);
+    final profile = botProfileFor(level.botProfileId);
     return Scaffold(
       body: Container(
         decoration: const BoxDecoration(
@@ -86,7 +88,9 @@ class _RangeChartScreenState extends State<RangeChartScreen> {
                         child: Column(
                           children: [
                             for (final s in _situations)
-                              _SituationCard(situation: s, line: line),
+                              _SituationCard(
+                                  situation: s, line: line, profile: profile),
+                            const _ChartLegend(),
                           ],
                         ),
                       ),
@@ -173,10 +177,12 @@ class _LevelTab extends StatelessWidget {
 }
 
 class _SituationCard extends StatelessWidget {
-  const _SituationCard({required this.situation, required this.line});
+  const _SituationCard(
+      {required this.situation, required this.line, required this.profile});
 
   final _Situation situation;
   final HumanLine line;
+  final BotProfile profile;
 
   @override
   Widget build(BuildContext context) {
@@ -205,7 +211,7 @@ class _SituationCard extends StatelessWidget {
           // Column headers.
           Row(
             children: [
-              const SizedBox(width: 34),
+              const SizedBox(width: 37),
               for (final c in situation.columns)
                 Expanded(
                   child: Text(
@@ -228,12 +234,32 @@ class _SituationCard extends StatelessWidget {
   }
 
   Widget _rankRow(Rank r) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 2),
+    final state = _lineState(profile, line, situation.nodes, r.value);
+    // Subtle line-completeness wash behind the row: faint green when the line
+    // is resolved (the bot has no further raise), faint amber when it's still
+    // open (empty, or the bot could re-raise and we've saved no answer).
+    final wash = switch (state) {
+      _LineState.complete => AppColors.win.withValues(alpha: 0.10),
+      _LineState.incomplete => const Color(0xFFE08A2B).withValues(alpha: 0.10),
+      _LineState.empty => const Color(0xFFE08A2B).withValues(alpha: 0.05),
+    };
+    final edge = switch (state) {
+      _LineState.complete => AppColors.win.withValues(alpha: 0.7),
+      _LineState.incomplete => const Color(0xFFE08A2B).withValues(alpha: 0.7),
+      _LineState.empty => Colors.white.withValues(alpha: 0.12),
+    };
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 2),
+      decoration: BoxDecoration(
+        color: wash,
+        borderRadius: BorderRadius.circular(8),
+        border: Border(left: BorderSide(color: edge, width: 3)),
+      ),
+      padding: const EdgeInsets.fromLTRB(6, 2, 0, 2),
       child: Row(
         children: [
           SizedBox(
-            width: 34,
+            width: 28,
             child: Text(
               r.label,
               style: const TextStyle(
@@ -300,4 +326,92 @@ String _moveLabel(BotMove move) {
     case BotMove.fold:
       return 'FOLD';
   }
+}
+
+/// How resolved a saved line is. [empty] = nothing saved here; [complete] = the
+/// line ends with no further bot raise possible; [incomplete] = the bot could
+/// still re-raise and we've saved no answer.
+enum _LineState { empty, complete, incomplete }
+
+/// The bot's facing node right after we pot/raise at one of *our* nodes — one
+/// raise deeper down the ladder.
+BetNode _botFacesAfterOurPot(BetNode ours) {
+  switch (ours) {
+    case BetNode.open:
+    case BetNode.checkedTo:
+      return BetNode.facingBet;
+    case BetNode.facingBet:
+      return BetNode.facingRaise;
+    case BetNode.facingRaise:
+    case BetNode.facingReraise:
+      return BetNode.facingReraise;
+  }
+}
+
+/// Whether the bot ever pots (raises) at [node] with any card.
+bool _botEverPots(BotProfile profile, BetNode node) =>
+    Rank.values.any((r) => profile.moveAt(node, r.value) == BotMove.pot);
+
+/// Walk a situation's "bot keeps raising" chain for one card and report whether
+/// the line is resolved. We pot → the bot may re-raise (faces a node one deeper):
+/// if it never raises there the line is done; if it can, we need the next node
+/// filled, else the line is still open.
+_LineState _lineState(
+    BotProfile profile, HumanLine line, List<BetNode> nodes, int v) {
+  for (var i = 0; i < nodes.length; i++) {
+    final move = line.moveAt(nodes[i], v);
+    if (move == null) {
+      return i == 0 ? _LineState.empty : _LineState.incomplete;
+    }
+    if (move != BotMove.pot) return _LineState.complete; // passive → resolved
+    if (!_botEverPots(profile, _botFacesAfterOurPot(nodes[i]))) {
+      return _LineState.complete; // our raise can't be re-raised
+    }
+    if (i == nodes.length - 1) return _LineState.incomplete; // no deeper column
+  }
+  return _LineState.incomplete;
+}
+
+/// The small key under the chart explaining the row washes.
+class _ChartLegend extends StatelessWidget {
+  const _ChartLegend();
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 4, bottom: 8),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          _swatch(AppColors.win, 'Line resolved'),
+          const SizedBox(width: 16),
+          _swatch(const Color(0xFFE08A2B), 'Bot may re-raise / empty'),
+        ],
+      ),
+    );
+  }
+
+  Widget _swatch(Color color, String label) => Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 14,
+            height: 14,
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: 0.18),
+              borderRadius: BorderRadius.circular(4),
+              border: Border(left: BorderSide(color: color, width: 3)),
+            ),
+          ),
+          const SizedBox(width: 6),
+          Text(
+            label,
+            style: const TextStyle(
+              fontSize: 11,
+              color: AppColors.textMuted,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      );
 }

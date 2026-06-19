@@ -675,7 +675,11 @@ class _BottomPanel extends StatelessWidget {
         !controller.autoAdvancing &&
         controller.canSaveLine &&
         !controller.sessionOver;
-    final height = savePrompt ? 124.0 : (twoRows ? 132.0 : 78.0);
+    // An advanced plan shows two branch lines stacked, so it needs more height.
+    final tallSave = savePrompt && controller.planLines.length > 1;
+    final height = tallSave
+        ? 160.0
+        : (savePrompt ? 124.0 : (twoRows ? 132.0 : 78.0));
     return Container(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 14),
       height: height,
@@ -1017,18 +1021,32 @@ class _SaveLinePrompt extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final card = controller.state.seats[HeadsUpController.humanSeat].card;
+    // Saving deals the next hand too — no separate "Next Hand" step.
+    void save() {
+      controller.saveLine();
+      controller.startHand();
+    }
+
+    final lines = controller.planLines;
+    final lineWidget = lines.length > 1
+        ? _MultiLineSave(
+            card: card,
+            lines: lines,
+            botName: controller.profile.name,
+            onTap: save,
+          )
+        : _LineButton(
+            card: card,
+            steps: controller.savableLine,
+            botName: controller.profile.name,
+            onTap: save,
+          );
+
     return Row(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Expanded(
-          flex: 3,
-          child: _LineButton(
-            card: controller.state.seats[HeadsUpController.humanSeat].card,
-            steps: controller.handLog,
-            botName: controller.profile.name,
-            onTap: controller.saveLine,
-          ),
-        ),
+        Expanded(flex: 3, child: lineWidget),
         const SizedBox(width: 8),
         Expanded(
           flex: 2,
@@ -1122,6 +1140,185 @@ class _LineButton extends StatelessWidget {
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// The advanced-plan save button: the player's card plus the two branch lines
+/// the plan covers, stacked — each tagged resolved (✓) or open ("?", the bot
+/// could still re-raise). The whole thing saves both lines in one tap.
+class _MultiLineSave extends StatelessWidget {
+  const _MultiLineSave({
+    required this.card,
+    required this.lines,
+    required this.botName,
+    required this.onTap,
+  });
+
+  final PlayingCard? card;
+  final List<PlanLine> lines;
+  final String botName;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(14),
+        onTap: onTap,
+        child: Ink(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          decoration: BoxDecoration(
+            color: AppColors.potPurpleDeep.withValues(alpha: 0.9),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: Colors.white, width: 2),
+          ),
+          child: Row(
+            children: [
+              if (card != null) ...[
+                PlayingCardWidget(card: card, faceUp: true, width: 30),
+                const SizedBox(width: 8),
+              ],
+              Expanded(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    for (final line in lines) ...[
+                      _BranchRow(line: line, botName: botName),
+                      if (line != lines.last) const SizedBox(height: 4),
+                    ],
+                  ],
+                ),
+              ),
+              const SizedBox(width: 6),
+              const Text(
+                '💾\nSAVE\nBOTH',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 9,
+                  height: 1.15,
+                  letterSpacing: 0.5,
+                  fontWeight: FontWeight.w800,
+                  color: Colors.white,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// One branch line in the advanced save prompt: its action blocks, a "passive
+/// bot" chip when the branch ends with the bot answering quietly, and a
+/// resolved/open tag.
+class _BranchRow extends StatelessWidget {
+  const _BranchRow({required this.line, required this.botName});
+
+  final PlanLine line;
+  final String botName;
+
+  @override
+  Widget build(BuildContext context) {
+    // A single-step branch is the "bot answered passively → showdown" line.
+    final passiveBranch = line.steps.length == 1;
+    return Row(
+      children: [
+        Expanded(
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: [
+                for (var i = 0; i < line.steps.length; i++) ...[
+                  if (i > 0)
+                    const Icon(Icons.chevron_right,
+                        size: 13, color: Colors.white54),
+                  _ActionBlock(step: line.steps[i], botName: botName),
+                ],
+                if (passiveBranch) ...[
+                  const Icon(Icons.chevron_right,
+                      size: 13, color: Colors.white54),
+                  _PassiveChip(botName: botName),
+                ],
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(width: 6),
+        _StatusTag(complete: line.complete),
+      ],
+    );
+  }
+}
+
+/// A muted block standing in for "the bot just answers passively and we go to
+/// showdown" — the tail of the first branch.
+class _PassiveChip extends StatelessWidget {
+  const _PassiveChip({required this.botName});
+
+  final String botName;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 2),
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 4),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: Colors.white24),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            botName.toUpperCase(),
+            style: const TextStyle(
+              fontSize: 7,
+              letterSpacing: 0.5,
+              fontWeight: FontWeight.w700,
+              color: Colors.white70,
+            ),
+          ),
+          const Text(
+            'PASSIVE',
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w900,
+              color: Colors.white70,
+              height: 1.1,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// The resolved/open tag at the end of a branch line: a green ✓ when the line
+/// is fully decided, an amber "?" when the bot could still re-raise it.
+class _StatusTag extends StatelessWidget {
+  const _StatusTag({required this.complete});
+
+  final bool complete;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = complete ? AppColors.win : const Color(0xFFE08A2B);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.22),
+        borderRadius: BorderRadius.circular(7),
+        border: Border.all(color: color.withValues(alpha: 0.8)),
+      ),
+      child: Icon(
+        complete ? Icons.check_rounded : Icons.help_outline_rounded,
+        size: 13,
+        color: Colors.white,
       ),
     );
   }

@@ -79,6 +79,18 @@ class LineStep {
   final ActionType type;
 }
 
+/// One branch an advanced plan covers, for the save prompt. A "Check ▸ Raise"
+/// plan, say, covers two: [Check] (the bot answers passively → showdown) and
+/// [Check, bot bets, Raise] (the bot bets, we raise). [complete] is false when
+/// our final action is a raise the bot could still re-raise — the line isn't
+/// resolved because we haven't decided how to answer that re-raise.
+class PlanLine {
+  const PlanLine(this.steps, this.complete);
+
+  final List<LineStep> steps;
+  final bool complete;
+}
+
 /// Drives the heads-up trainer: the human defends against a fully transparent
 /// [BotProfile]. Play, the narration, the range bar and the EV hint all read
 /// the *same* profile, so what the bar predicts is exactly what the bot does.
@@ -173,6 +185,22 @@ class HeadsUpController extends ChangeNotifier {
   /// Every move of the current hand in play order (both seats), for the save
   /// button's line preview. Reset each hand.
   final List<LineStep> handLog = [];
+
+  /// The line as it's actually saved: [handLog] truncated at our last action.
+  /// A trailing bot move (its reply to our final bet) isn't a decision we store,
+  /// so the save preview shouldn't show it either.
+  List<LineStep> get savableLine {
+    var end = handLog.length;
+    while (end > 0 && !handLog[end - 1].isHuman) {
+      end--;
+    }
+    return handLog.sublist(0, end);
+  }
+
+  /// When the just-played hand was an advanced plan, the branches it covers —
+  /// each saved on "Save line". Empty for simple actions (use [savableLine]).
+  List<PlanLine> _planLines = const [];
+  List<PlanLine> get planLines => _planLines;
 
   /// The action the player is hovering, if any — drives which action's EV the
   /// hint bar shows. Exactly one of [hoveredAction] / [hoveredPlan] is non-null.
@@ -302,6 +330,7 @@ class HeadsUpController extends ChangeNotifier {
     hoveredPlan = null;
     _pendingLine = HumanLine(); // fresh capture for the new hand
     _lineSaved = false;
+    _planLines = const [];
     handLog.clear();
     _button = (_button + 1) % 2; // switch positions each hand
     _botRange
@@ -335,6 +364,7 @@ class HeadsUpController extends ChangeNotifier {
     if (!isHumanTurn) return;
     hoveredAction = null;
     hoveredPlan = null;
+    _planLines = const []; // a simple action — the single-line preview applies
     _capture(action);
     handLog.add(LineStep(true, action.type));
     _engine.applyAction(state, action);
@@ -378,8 +408,12 @@ class HeadsUpController extends ChangeNotifier {
     hoveredPlan = null;
     busy = true;
 
+    // Capture *both* branches of the plan up front (our first action and our
+    // planned reply if the bot puts the ball back), so the saved line covers
+    // both contingencies even if only one actually plays out this hand.
+    _captureCompound(plan);
+
     final firstAction = _planFirst(plan.first);
-    _capture(firstAction);
     handLog.add(LineStep(true, firstAction.type));
     _engine.applyAction(state, firstAction);
     _rebuildRange();
@@ -394,7 +428,6 @@ class HeadsUpController extends ChangeNotifier {
       if (v != null) {
         await Future<void>.delayed(_stepDelay);
         final secondAction = _planSecond(plan.second, v);
-        _capture(secondAction);
         handLog.add(LineStep(true, secondAction.type));
         _engine.applyAction(state, secondAction);
         _rebuildRange();
@@ -405,6 +438,93 @@ class HeadsUpController extends ChangeNotifier {
     }
 
     await _settle();
+  }
+
+  /// Record both of an advanced plan's decisions into the pending line, and
+  /// build the [planLines] preview. Reads the live state *before* anything is
+  /// played, simulating the bot's aggressive reply to find the node our second
+  /// action would face. No-op for capture if the feature is locked, but the
+  /// preview is still built so the save prompt can show the branches.
+  void _captureCompound(CompoundPlan plan) {
+    final card = seats[humanSeat].card;
+    if (card == null || state.toAct != humanSeat) {
+      _planLines = const [];
+      return;
+    }
+    final v = card.rank.value;
+    final firstAction = _planFirst(plan.first);
+
+    if (autoPlayUnlocked) {
+      _pendingLine.record(
+          _nodeForSeat(humanSeat), v, _moveOf(firstAction));
+    }
+
+    // Branch A: our first action, then the bot answers passively → showdown.
+    final lines = <PlanLine>[PlanLine([LineStep(true, plan.first)], true)];
+
+    // Branch B: simulate our first action + the bot's aggressive reply to see
+    // whether the second decision is even reachable, and at which node.
+    final sim = state.clone();
+    _engine.applyAction(sim, firstAction);
+    if (sim.phase == HandPhase.betting && sim.toAct == botSeat) {
+      final botView = _engine.buildView(sim, botSeat);
+      if (botView.canBet) {
+        _engine.applyAction(sim, const GameAction.bet(0)); // bot's raise
+        if (sim.phase == HandPhase.betting && sim.toAct == humanSeat) {
+          final node2 = _nodeAt(sim, humanSeat);
+          if (autoPlayUnlocked) {
+            _pendingLine.record(node2, v, _secondMove(plan.second));
+          }
+          lines.add(PlanLine(
+            [
+              LineStep(true, plan.first),
+              const LineStep(false, ActionType.bet),
+              LineStep(true, _planReplyType(plan.second)),
+            ],
+            _branchBComplete(plan, sim),
+          ));
+        }
+      }
+    }
+    _planLines = lines;
+  }
+
+  /// The saved [BotMove] for the planned second action.
+  BotMove _secondMove(PlanReply r) {
+    switch (r) {
+      case PlanReply.raise:
+        return BotMove.pot;
+      case PlanReply.call:
+        return BotMove.call;
+      case PlanReply.fold:
+        return BotMove.fold;
+    }
+  }
+
+  /// The [ActionType] to *show* for the planned second action (a raise is a bet
+  /// over the bot's bet).
+  ActionType _planReplyType(PlanReply r) {
+    switch (r) {
+      case PlanReply.raise:
+        return ActionType.bet;
+      case PlanReply.call:
+        return ActionType.call;
+      case PlanReply.fold:
+        return ActionType.fold;
+    }
+  }
+
+  /// Branch B is resolved unless our final action is a raise the bot could still
+  /// re-raise: if any card the bot can hold here pots over our raise, we haven't
+  /// decided the answer, so the line isn't complete. [sim] is the state with the
+  /// bot to act after raising into our check/bet.
+  bool _branchBComplete(CompoundPlan plan, HandState sim) {
+    if (plan.second != PlanReply.raise) return true; // call/fold ends it
+    final s = sim.clone();
+    _engine.applyAction(s, _heroRaiseAt(s)); // our raise
+    if (!(s.phase == HandPhase.betting && s.toAct == botSeat)) return true;
+    final node = _nodeAt(s, botSeat);
+    return !_botRange.any((vv) => profile.moveAt(node, vv) == BotMove.pot);
   }
 
   GameAction _planFirst(ActionType first) => first == ActionType.check
