@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-import 'home/home_screen.dart';
+import 'features/adventure_map/adventure_map_screen.dart';
 import 'theme/app_theme.dart';
 
 class NuclearPokerApp extends StatelessWidget {
@@ -12,7 +12,7 @@ class NuclearPokerApp extends StatelessWidget {
       title: 'NuclearPoker',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.dark,
-      home: const HomeScreen(),
+      home: const AdventureMapScreen(),
     );
   }
 }

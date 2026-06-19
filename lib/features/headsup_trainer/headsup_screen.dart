@@ -15,10 +15,24 @@ import 'widgets/ev_bar.dart';
 import 'widgets/range_bar.dart';
 
 /// Heads-up trainer: defend your big blind against a transparent range bot.
+///
+/// Reached two ways: free-play from the bot picker ([levelTitle] null), or as a
+/// map level — then [levelTitle] names the level and busting the bot pops `true`
+/// back to the map to mark it complete.
 class HeadsUpScreen extends StatefulWidget {
-  const HeadsUpScreen({super.key, required this.profile});
+  const HeadsUpScreen({
+    super.key,
+    required this.profile,
+    this.startingStack = 50,
+    this.levelTitle,
+  });
 
   final BotProfile profile;
+  final int startingStack;
+
+  /// When non-null, this screen is a map level: the top bar shows this title and
+  /// busting the bot offers a "Level Complete" button that pops `true`.
+  final String? levelTitle;
 
   @override
   State<HeadsUpScreen> createState() => _HeadsUpScreenState();
@@ -27,10 +41,15 @@ class HeadsUpScreen extends StatefulWidget {
 class _HeadsUpScreenState extends State<HeadsUpScreen> {
   late final HeadsUpController controller;
 
+  bool get _isLevel => widget.levelTitle != null;
+
   @override
   void initState() {
     super.initState();
-    controller = HeadsUpController(profile: widget.profile);
+    controller = HeadsUpController(
+      profile: widget.profile,
+      startingStack: widget.startingStack,
+    );
   }
 
   @override
@@ -72,7 +91,10 @@ class _HeadsUpScreenState extends State<HeadsUpScreen> {
                 final state = controller.state;
                 return Column(
                   children: [
-                    _TopBar(controller: controller),
+                    _TopBar(
+                      controller: controller,
+                      title: widget.levelTitle ?? 'Heads-Up Trainer',
+                    ),
                     Expanded(
                       child: Padding(
                         padding: const EdgeInsets.fromLTRB(12, 4, 12, 4),
@@ -106,7 +128,12 @@ class _HeadsUpScreenState extends State<HeadsUpScreen> {
                         ),
                       ),
                     ),
-                    _BottomPanel(controller: controller, state: state),
+                    _BottomPanel(
+                      controller: controller,
+                      state: state,
+                      onLevelComplete:
+                          _isLevel ? () => Navigator.of(context).pop(true) : null,
+                    ),
                   ],
                 );
               },
@@ -482,9 +509,10 @@ class _PotPill extends StatelessWidget {
 }
 
 class _TopBar extends StatelessWidget {
-  const _TopBar({required this.controller});
+  const _TopBar({required this.controller, required this.title});
 
   final HeadsUpController controller;
+  final String title;
 
   @override
   Widget build(BuildContext context) {
@@ -496,11 +524,11 @@ class _TopBar extends StatelessWidget {
             icon: const Icon(Icons.arrow_back, color: AppColors.textPrimary),
             onPressed: () => Navigator.of(context).maybePop(),
           ),
-          const Flexible(
+          Flexible(
             child: Text(
-              'Heads-Up Trainer',
+              title,
               overflow: TextOverflow.ellipsis,
-              style: TextStyle(
+              style: const TextStyle(
                 fontSize: 17,
                 fontWeight: FontWeight.w800,
                 color: AppColors.textPrimary,
@@ -568,10 +596,18 @@ class _MiniToggle extends StatelessWidget {
 }
 
 class _BottomPanel extends StatelessWidget {
-  const _BottomPanel({required this.controller, required this.state});
+  const _BottomPanel({
+    required this.controller,
+    required this.state,
+    this.onLevelComplete,
+  });
 
   final HeadsUpController controller;
   final HandState state;
+
+  /// In map-level mode: called when the player busts the bot, to pop the win
+  /// result back to the map. Null in free-play.
+  final VoidCallback? onLevelComplete;
 
   @override
   Widget build(BuildContext context) {
@@ -626,8 +662,16 @@ class _BottomPanel extends StatelessWidget {
   Widget _endControls() {
     if (controller.sessionOver) {
       final won = controller.botBusted;
+      // Map level + win → hand the victory back to the map to unlock the next.
+      if (won && onLevelComplete != null) {
+        return _FullButton(
+          label: '🏆 Level cleared! — Continue',
+          color: AppColors.goldDeep,
+          onTap: onLevelComplete!,
+        );
+      }
       return _FullButton(
-        label: won ? '🏆 You busted Dex! — Play again' : 'Out of chips — Reset',
+        label: won ? '🏆 You busted the bot! — Play again' : 'Out of chips — Reset',
         color: won ? AppColors.goldDeep : AppColors.danger,
         onTap: controller.resetSession,
       );

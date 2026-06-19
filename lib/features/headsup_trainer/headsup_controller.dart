@@ -73,8 +73,14 @@ class CompoundPlan {
 /// [BotProfile]. Play, the narration, the range bar and the EV hint all read
 /// the *same* profile, so what the bar predicts is exactly what the bot does.
 class HeadsUpController extends ChangeNotifier {
-  HeadsUpController({BotProfile? profile, int? seed})
+  HeadsUpController({BotProfile? profile, int? seed, int startingStack = 50})
       : profile = profile ?? BotProfile.pro,
+        rules = RuleConfig(
+          startingStack: startingStack,
+          smallBlind: 1,
+          bigBlind: 1,
+          maxPlayers: 2,
+        ),
         _rng = seed == null ? Random() : Random(seed) {
     seats = [
       Seat(
@@ -96,12 +102,8 @@ class HeadsUpController extends ChangeNotifier {
     startHand();
   }
 
-  static const RuleConfig rules = RuleConfig(
-    startingStack: 50,
-    smallBlind: 1,
-    bigBlind: 1,
-    maxPlayers: 2,
-  );
+  /// Table config, derived from the per-level starting stack (default 50).
+  final RuleConfig rules;
 
   static const int humanSeat = 0;
   static const int botSeat = 1;
