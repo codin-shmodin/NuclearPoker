@@ -26,6 +26,12 @@ class HumanLine {
     (_moves[node] ??= <int, BotMove>{})[rankValue] = move;
   }
 
+  /// Forget the action saved at ([node], [rankValue]), if any — used by the
+  /// editor when a cell cycles back to its blank state.
+  void clear(BetNode node, int rankValue) {
+    _moves[node]?.remove(rankValue);
+  }
+
   /// Fold every entry of [other] into this line (other wins on conflict).
   void merge(HumanLine other) {
     other._moves.forEach((node, byRank) {

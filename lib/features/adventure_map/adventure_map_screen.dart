@@ -127,13 +127,13 @@ class _AdventureMapScreenState extends State<AdventureMapScreen> {
             SizedBox(height: 14),
             _IntroPoint(
               icon: Icons.bolt_rounded,
-              text: 'Then play hands and hit Save line to teach your own bot. '
-                  'Turn on Auto and it plays your saved line for you.',
+              text: 'Then play hands and hit Save line to build your auto-range. '
+                  'Turn on Auto and it plays your auto-range for you.',
             ),
             SizedBox(height: 14),
             _IntroPoint(
               icon: Icons.grid_view_rounded,
-              text: 'See your saved ranges any time from the grid button '
+              text: 'See and edit your auto-range any time from the grid button '
                   'up top.',
             ),
             SizedBox(height: 14),
@@ -423,7 +423,7 @@ class _Hud extends StatelessWidget {
           _RewardTray(coins: coins),
           const SizedBox(width: 4),
           IconButton(
-            tooltip: 'Your ranges',
+            tooltip: 'Your auto-range',
             onPressed: onRangeChart,
             icon: const Icon(Icons.grid_view_rounded,
                 color: AppColors.textPrimary),

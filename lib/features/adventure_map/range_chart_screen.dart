@@ -1,36 +1,36 @@
 import 'package:flutter/material.dart';
 
 import '../../engine/cards/rank.dart';
-import '../../engine/players/bot_profile.dart' show BetNode, BotProfile;
+import '../../engine/players/bot_profile.dart' show BetNode;
 import '../../engine/players/range_bot.dart' show BotMove;
 import '../../theme/app_colors.dart';
+import '../headsup_trainer/headsup_controller.dart' show aggroVerb, aggroVerbCap;
 import '../headsup_trainer/human_line.dart';
 import 'level.dart';
 import 'line_store.dart';
 
-/// One situation column-group in the chart: a heading plus the chain of *your*
-/// decision nodes along the "villain keeps raising" line (see
-/// docs/expansion-plans.md §1).
-class _Situation {
-  const _Situation(this.title, this.nodes, this.columns);
-  final String title;
-  final List<BetNode> nodes;
-  final List<String> columns; // short header per node
-}
+/// Which position the row describes — the two halves of the auto-range chart.
+enum _Section { btn, bb }
 
-const List<_Situation> _situations = [
-  _Situation('You open (button)',
-      [BetNode.open, BetNode.facingRaise, BetNode.facingReraise],
-      ['Open', 'v Raise', 'v 4-bet']),
-  _Situation('Facing a bet',
-      [BetNode.facingBet, BetNode.facingRaise, BetNode.facingReraise],
-      ['v Bet', 'v Raise', 'v 4-bet']),
-  _Situation('Checked to you', [BetNode.checkedTo], ['Check?']),
-];
+/// Your options at a "passive" node (open / checked to you): check, or open the
+/// betting. At a "facing" node you can fold, call, or raise.
+const List<BotMove> _passiveMoves = [BotMove.check, BotMove.pot];
+const List<BotMove> _facingMoves = [BotMove.fold, BotMove.call, BotMove.pot];
 
-/// Read-only view of the player's *designed* range (their saved [HumanLine]) for
-/// each level — the 13 ranks × 3 situations layout. Reached from the map's
-/// chart button. Empty cells are spots you haven't captured yet.
+/// The facing node you reach when the action you're now answering is the
+/// [depth]-th aggressive action of the round (1 = a bet, 2 = a raise, 3+ = a
+/// re-raise). Deeper than a re-raise all folds back into [BetNode.facingReraise].
+BetNode _facingNode(int depth) => depth <= 1
+    ? BetNode.facingBet
+    : depth == 2
+        ? BetNode.facingRaise
+        : BetNode.facingReraise;
+
+/// The editable view of the player's own *auto-range* — the saved [HumanLine]
+/// the trainer auto-plays for them. Two sections (BTN / BB) of 13 rank rows.
+/// Tap a square to cycle your action (it auto-saves); tap a dim arrow to add the
+/// next "and the opponent raises again" step. Reached from the map's chart
+/// button, one tab per level/opponent.
 class RangeChartScreen extends StatefulWidget {
   const RangeChartScreen({super.key, required this.lineStore});
 
@@ -45,6 +45,14 @@ class _RangeChartScreenState extends State<RangeChartScreen> {
   bool _loading = true;
   int _selected = kLevels.first.id;
 
+  /// How many *optional* (opponent-raises-again) steps the player has revealed
+  /// for a given row, keyed by "section_rank_branch".
+  final Map<String, int> _revealed = {};
+
+  /// In the BB section, which branch a row currently shows: true = the opponent
+  /// opened the betting (facing a bet), false = the opponent checked to you.
+  final Map<String, bool> _bbBet = {};
+
   @override
   void initState() {
     super.initState();
@@ -58,11 +66,26 @@ class _RangeChartScreenState extends State<RangeChartScreen> {
     if (mounted) setState(() => _loading = false);
   }
 
+  HumanLine get _line => _lines[_selected] ??= HumanLine();
+
+  Future<void> _save() => widget.lineStore.save(_selected, _line);
+
+  void _cycle(BetNode node, int rv, List<BotMove> moves) {
+    final cycle = <BotMove?>[null, ...moves];
+    final i = cycle.indexOf(_line.moveAt(node, rv));
+    final next = cycle[(i + 1) % cycle.length];
+    setState(() {
+      if (next == null) {
+        _line.clear(node, rv);
+      } else {
+        _line.record(node, rv, next);
+      }
+    });
+    _save();
+  }
+
   @override
   Widget build(BuildContext context) {
-    final line = _lines[_selected] ?? HumanLine();
-    final level = kLevels.firstWhere((l) => l.id == _selected);
-    final profile = botProfileFor(level.botProfileId);
     return Scaffold(
       body: Container(
         decoration: const BoxDecoration(
@@ -87,9 +110,8 @@ class _RangeChartScreenState extends State<RangeChartScreen> {
                         padding: const EdgeInsets.fromLTRB(12, 4, 12, 24),
                         child: Column(
                           children: [
-                            for (final s in _situations)
-                              _SituationCard(
-                                  situation: s, line: line, profile: profile),
+                            _sectionCard(_Section.btn),
+                            _sectionCard(_Section.bb),
                             const _ChartLegend(),
                           ],
                         ),
@@ -111,7 +133,7 @@ class _RangeChartScreenState extends State<RangeChartScreen> {
               onPressed: () => Navigator.of(context).maybePop(),
             ),
             const Text(
-              'Your Ranges',
+              'Your Auto-Range',
               style: TextStyle(
                 fontSize: 17,
                 fontWeight: FontWeight.w800,
@@ -138,7 +160,226 @@ class _RangeChartScreenState extends State<RangeChartScreen> {
           ],
         ),
       );
+
+  // ---- Section + rows -----------------------------------------------------
+
+  Widget _sectionCard(_Section section) {
+    final ranks = Rank.values.reversed.toList(); // A → 2
+    final isBtn = section == _Section.btn;
+    return Container(
+      margin: const EdgeInsets.only(bottom: 14),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: AppColors.feltDark.withValues(alpha: 0.55),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppColors.gold.withValues(alpha: 0.35)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            isBtn ? 'BTN' : 'BB',
+            style: const TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.w900,
+              color: AppColors.goldBright,
+              letterSpacing: 1.0,
+            ),
+          ),
+          Text(
+            isBtn
+                ? 'You act first — pick your action, then answer each raise.'
+                : 'The opponent acts first — tap the arrow to set what they do.',
+            style: const TextStyle(
+              fontSize: 10.5,
+              fontWeight: FontWeight.w600,
+              color: AppColors.textMuted,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Column(
+                children: [
+                  for (final r in ranks)
+                    SizedBox(
+                      width: 22,
+                      height: _kRowH,
+                      child: Center(
+                        child: Text(
+                          r.label,
+                          style: const TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w900,
+                            color: AppColors.textPrimary,
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+              const SizedBox(width: 6),
+              Expanded(
+                child: SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      for (final r in ranks)
+                        SizedBox(
+                          height: _kRowH,
+                          child: Row(children: _segments(section, r.value)),
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Build one row left→right: your squares interleaved with opponent arrows,
+  /// walking the betting line and stopping where it resolves (you call/fold, or
+  /// the opponent's next raise hasn't been revealed yet).
+  List<Widget> _segments(_Section section, int rv) {
+    final out = <Widget>[];
+    int aggr; // aggressive actions taken before the square about to be added
+    BetNode node;
+
+    if (section == _Section.btn) {
+      out.add(_cell(BetNode.open, rv, _passiveMoves, 1));
+      final youChecked = _line.moveAt(BetNode.open, rv) == BotMove.check;
+      // The opponent always gets to act; this first arrow is always live.
+      aggr = youChecked ? 1 : 2; // they bet (1) if you checked, else raise (2)
+      out.add(_arrow(active: true, blue: false, label: aggroVerb(aggr)));
+      node = _facingNode(aggr);
+      out.add(_cell(node, rv, _facingMoves, aggr + 1));
+    } else {
+      final betKey = '$rv';
+      final bet = _bbBet[betKey] ?? true;
+      out.add(_arrow(
+        active: bet,
+        blue: !bet,
+        label: bet ? aggroVerb(1) : 'check',
+        onTap: () => setState(() => _bbBet[betKey] = !bet),
+      ));
+      if (bet) {
+        aggr = 1;
+        node = BetNode.facingBet;
+        out.add(_cell(node, rv, _facingMoves, aggr + 1));
+      } else {
+        aggr = 0;
+        node = BetNode.checkedTo;
+        out.add(_cell(node, rv, _passiveMoves, aggr + 1));
+      }
+    }
+
+    // Optional deeper steps: only while you keep raising (pot) does the
+    // opponent get another raise to answer.
+    final branch = section == _Section.bb ? (_bbBet['$rv'] ?? true) : true;
+    final key = '${section.name}_${rv}_$branch';
+    final revealed = _revealed[key] ?? 0;
+    var optional = 0;
+    while (true) {
+      if (_line.moveAt(node, rv) != BotMove.pot) break; // you didn't raise
+      if (node == BetNode.facingReraise) break; // deepest node we model
+      final botDepth = aggr + 2; // your raise = aggr+1, their re-raise = aggr+2
+      final nextNode = _facingNode(botDepth);
+      final hasData = _line.moveAt(nextNode, rv) != null;
+      final active = optional < revealed || hasData;
+      final idx = optional;
+      out.add(_arrow(
+        active: active,
+        blue: false,
+        label: aggroVerb(botDepth),
+        onTap: active ? null : () => setState(() => _revealed[key] = idx + 1),
+      ));
+      if (!active) break; // dim arrow — wait for the player to reveal it
+      aggr = botDepth;
+      node = nextNode;
+      out.add(_cell(node, rv, _facingMoves, aggr + 1));
+      optional++;
+    }
+    return out;
+  }
+
+  Widget _cell(BetNode node, int rv, List<BotMove> moves, int aggrIndex) {
+    final move = _line.moveAt(node, rv);
+    return GestureDetector(
+      onTap: () => _cycle(node, rv, moves),
+      child: Container(
+        width: 52,
+        height: 26,
+        margin: const EdgeInsets.symmetric(horizontal: 1, vertical: 4),
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: move == null
+              ? Colors.white.withValues(alpha: 0.04)
+              : _moveColor(move).withValues(alpha: 0.9),
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(
+            color: move == null ? Colors.white12 : Colors.white24,
+          ),
+        ),
+        child: Text(
+          move == null ? '·' : _moveLabel(move, aggrIndex),
+          style: TextStyle(
+            fontSize: 9,
+            fontWeight: FontWeight.w900,
+            color: move == null ? AppColors.textMuted : Colors.white,
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// An opponent action between two of your squares. [active] arrows are filled
+  /// (purple for a bet/raise, blue for a check); a dim arrow is an unrevealed
+  /// "they raise again" step you can tap to add.
+  Widget _arrow({
+    required bool active,
+    required bool blue,
+    required String label,
+    VoidCallback? onTap,
+  }) {
+    final color = !active
+        ? Colors.white.withValues(alpha: 0.22)
+        : blue
+            ? AppColors.chipBlue
+            : AppColors.potPurple;
+    return GestureDetector(
+      onTap: onTap,
+      behavior: HitTestBehavior.opaque,
+      child: SizedBox(
+        width: 34,
+        height: _kRowH,
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.arrow_right_alt, color: color, size: 22),
+            Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.visible,
+              style: TextStyle(
+                fontSize: 7.5,
+                height: 1,
+                fontWeight: FontWeight.w800,
+                color: color,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
+
+const double _kRowH = 38;
 
 class _LevelTab extends StatelessWidget {
   const _LevelTab(
@@ -176,132 +417,6 @@ class _LevelTab extends StatelessWidget {
   }
 }
 
-class _SituationCard extends StatelessWidget {
-  const _SituationCard(
-      {required this.situation, required this.line, required this.profile});
-
-  final _Situation situation;
-  final HumanLine line;
-  final BotProfile profile;
-
-  @override
-  Widget build(BuildContext context) {
-    final ranks = Rank.values.reversed.toList(); // A → 2
-    return Container(
-      margin: const EdgeInsets.only(bottom: 14),
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: AppColors.feltDark.withValues(alpha: 0.55),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppColors.gold.withValues(alpha: 0.35)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            situation.title,
-            style: const TextStyle(
-              fontSize: 14,
-              fontWeight: FontWeight.w900,
-              color: AppColors.goldBright,
-              letterSpacing: 0.5,
-            ),
-          ),
-          const SizedBox(height: 8),
-          // Column headers.
-          Row(
-            children: [
-              const SizedBox(width: 37),
-              for (final c in situation.columns)
-                Expanded(
-                  child: Text(
-                    c,
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(
-                      fontSize: 10,
-                      fontWeight: FontWeight.w700,
-                      color: AppColors.textMuted,
-                    ),
-                  ),
-                ),
-            ],
-          ),
-          const SizedBox(height: 4),
-          for (final r in ranks) _rankRow(r),
-        ],
-      ),
-    );
-  }
-
-  Widget _rankRow(Rank r) {
-    final state = _lineState(profile, line, situation.nodes, r.value);
-    // Subtle line-completeness wash behind the row: faint green when the line
-    // is resolved (the bot has no further raise), faint amber when it's still
-    // open (empty, or the bot could re-raise and we've saved no answer).
-    final wash = switch (state) {
-      _LineState.complete => AppColors.win.withValues(alpha: 0.10),
-      _LineState.incomplete => const Color(0xFFE08A2B).withValues(alpha: 0.10),
-      _LineState.empty => const Color(0xFFE08A2B).withValues(alpha: 0.05),
-    };
-    final edge = switch (state) {
-      _LineState.complete => AppColors.win.withValues(alpha: 0.7),
-      _LineState.incomplete => const Color(0xFFE08A2B).withValues(alpha: 0.7),
-      _LineState.empty => Colors.white.withValues(alpha: 0.12),
-    };
-    return Container(
-      margin: const EdgeInsets.symmetric(vertical: 2),
-      decoration: BoxDecoration(
-        color: wash,
-        borderRadius: BorderRadius.circular(8),
-        border: Border(left: BorderSide(color: edge, width: 3)),
-      ),
-      padding: const EdgeInsets.fromLTRB(6, 2, 0, 2),
-      child: Row(
-        children: [
-          SizedBox(
-            width: 28,
-            child: Text(
-              r.label,
-              style: const TextStyle(
-                fontSize: 14,
-                fontWeight: FontWeight.w900,
-                color: AppColors.textPrimary,
-              ),
-            ),
-          ),
-          for (final node in situation.nodes)
-            Expanded(child: _cell(line.moveAt(node, r.value))),
-        ],
-      ),
-    );
-  }
-
-  Widget _cell(BotMove? move) {
-    return Container(
-      height: 22,
-      margin: const EdgeInsets.symmetric(horizontal: 2),
-      alignment: Alignment.center,
-      decoration: BoxDecoration(
-        color: move == null
-            ? Colors.white.withValues(alpha: 0.04)
-            : _moveColor(move).withValues(alpha: 0.9),
-        borderRadius: BorderRadius.circular(6),
-        border: Border.all(
-          color: move == null ? Colors.white12 : Colors.white24,
-        ),
-      ),
-      child: Text(
-        move == null ? '·' : _moveLabel(move),
-        style: TextStyle(
-          fontSize: 9,
-          fontWeight: FontWeight.w900,
-          color: move == null ? AppColors.textMuted : Colors.white,
-        ),
-      ),
-    );
-  }
-}
-
 Color _moveColor(BotMove move) {
   switch (move) {
     case BotMove.pot:
@@ -315,10 +430,10 @@ Color _moveColor(BotMove move) {
   }
 }
 
-String _moveLabel(BotMove move) {
+String _moveLabel(BotMove move, int aggrIndex) {
   switch (move) {
     case BotMove.pot:
-      return 'POT';
+      return aggroVerbCap(aggrIndex).toUpperCase(); // BET / RAISE / 3-BET …
     case BotMove.call:
       return 'CALL';
     case BotMove.check:
@@ -328,51 +443,7 @@ String _moveLabel(BotMove move) {
   }
 }
 
-/// How resolved a saved line is. [empty] = nothing saved here; [complete] = the
-/// line ends with no further bot raise possible; [incomplete] = the bot could
-/// still re-raise and we've saved no answer.
-enum _LineState { empty, complete, incomplete }
-
-/// The bot's facing node right after we pot/raise at one of *our* nodes — one
-/// raise deeper down the ladder.
-BetNode _botFacesAfterOurPot(BetNode ours) {
-  switch (ours) {
-    case BetNode.open:
-    case BetNode.checkedTo:
-      return BetNode.facingBet;
-    case BetNode.facingBet:
-      return BetNode.facingRaise;
-    case BetNode.facingRaise:
-    case BetNode.facingReraise:
-      return BetNode.facingReraise;
-  }
-}
-
-/// Whether the bot ever pots (raises) at [node] with any card.
-bool _botEverPots(BotProfile profile, BetNode node) =>
-    Rank.values.any((r) => profile.moveAt(node, r.value) == BotMove.pot);
-
-/// Walk a situation's "bot keeps raising" chain for one card and report whether
-/// the line is resolved. We pot → the bot may re-raise (faces a node one deeper):
-/// if it never raises there the line is done; if it can, we need the next node
-/// filled, else the line is still open.
-_LineState _lineState(
-    BotProfile profile, HumanLine line, List<BetNode> nodes, int v) {
-  for (var i = 0; i < nodes.length; i++) {
-    final move = line.moveAt(nodes[i], v);
-    if (move == null) {
-      return i == 0 ? _LineState.empty : _LineState.incomplete;
-    }
-    if (move != BotMove.pot) return _LineState.complete; // passive → resolved
-    if (!_botEverPots(profile, _botFacesAfterOurPot(nodes[i]))) {
-      return _LineState.complete; // our raise can't be re-raised
-    }
-    if (i == nodes.length - 1) return _LineState.incomplete; // no deeper column
-  }
-  return _LineState.incomplete;
-}
-
-/// The small key under the chart explaining the row washes.
+/// The small key under the chart.
 class _ChartLegend extends StatelessWidget {
   const _ChartLegend();
 
@@ -380,12 +451,30 @@ class _ChartLegend extends StatelessWidget {
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.only(top: 4, bottom: 8),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
+      child: Column(
         children: [
-          _swatch(AppColors.win, 'Line resolved'),
-          const SizedBox(width: 16),
-          _swatch(const Color(0xFFE08A2B), 'Bot may re-raise / empty'),
+          Wrap(
+            alignment: WrapAlignment.center,
+            spacing: 14,
+            runSpacing: 6,
+            children: [
+              _swatch(AppColors.potPurple, 'Bet / raise'),
+              _swatch(AppColors.chipGreen, 'Call'),
+              _swatch(AppColors.chipBlue, 'Check'),
+              _swatch(AppColors.danger, 'Fold'),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'Tap a square to set your action · tap a dim arrow to add the '
+            'opponent’s next raise',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 10.5,
+              color: AppColors.textMuted.withValues(alpha: 0.9),
+              fontWeight: FontWeight.w600,
+            ),
+          ),
         ],
       ),
     );
@@ -398,9 +487,9 @@ class _ChartLegend extends StatelessWidget {
             width: 14,
             height: 14,
             decoration: BoxDecoration(
-              color: color.withValues(alpha: 0.18),
+              color: color.withValues(alpha: 0.9),
               borderRadius: BorderRadius.circular(4),
-              border: Border(left: BorderSide(color: color, width: 3)),
+              border: Border.all(color: Colors.white24),
             ),
           ),
           const SizedBox(width: 6),
