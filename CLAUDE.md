@@ -14,7 +14,8 @@ client-side in Dart. Full rationale in `docs/stack-management.md`.
 
 ## Where things are
 - `docs/` — design docs: `stack-management.md` (stack rationale),
-  `one-card-poker-framework.md` (as-built engine), `heads-up-trainer.md` (Quest 1: range bot + EV).
+  `one-card-poker-framework.md` (as-built engine), `heads-up-trainer.md` (Quest 1: range bot + EV),
+  `expansion-plans.md` (levels + range-automation editor + particle/extraction currency — brainstorm).
 - `lib/engine/` — pure-Dart game logic (cards, rules engine, AI players). No Flutter imports.
 - `lib/features/headsup_trainer/` — current Quest 1. `lib/features/quest_one_card/` — legacy 6-max table.
 - `lib/home/`, `lib/theme/` — entry screen and theming.
