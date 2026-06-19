@@ -9,7 +9,10 @@ class Identity {
   final String username;
   final String password;
 
-  bool get isAdmin => username.trim().toLowerCase() == 'admin';
+  /// Admin requires the username **and** password to both be `admin`. Anyone
+  /// else named "admin" with a different password is just a normal player.
+  bool get isAdmin =>
+      username.trim().toLowerCase() == 'admin' && password == 'admin';
 
   /// Storage-key prefix so each user's progress + ranges are kept separate.
   String get namespace => 'u:${username.trim().toLowerCase()}:';

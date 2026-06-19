@@ -30,6 +30,7 @@ class AdventureMapScreen extends StatefulWidget {
     super.key,
     this.store,
     this.identity = const Identity('guest', ''),
+    this.showIntro = false,
   });
 
   /// Injectable for tests; defaults to the on-device prefs store.
@@ -38,6 +39,10 @@ class AdventureMapScreen extends StatefulWidget {
   /// Who's playing — keys per-user storage and grants admin (all levels +
   /// auto-play).
   final Identity identity;
+
+  /// Show the one-time how-to-play intro once the map appears (set right after a
+  /// fresh registration).
+  final bool showIntro;
 
   @override
   State<AdventureMapScreen> createState() => _AdventureMapScreenState();
@@ -88,6 +93,63 @@ class _AdventureMapScreenState extends State<AdventureMapScreen> {
       _progress = progress;
       _loading = false;
     });
+    if (widget.showIntro && !_introShown) {
+      _introShown = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _showIntroDialog();
+      });
+    }
+  }
+
+  bool _introShown = false;
+
+  void _showIntroDialog() {
+    showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: AppColors.feltDark,
+        shape:
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        title: const Text('How it works',
+            style: TextStyle(
+                color: AppColors.goldBright, fontWeight: FontWeight.w900)),
+        content: const Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _IntroPoint(
+              icon: Icons.lock_open_rounded,
+              text: 'Beat a level to unlock auto-play for that level.',
+            ),
+            SizedBox(height: 14),
+            _IntroPoint(
+              icon: Icons.bolt_rounded,
+              text: 'Then play hands and hit Save line to teach your own bot. '
+                  'Turn on Auto and it plays your saved line for you.',
+            ),
+            SizedBox(height: 14),
+            _IntroPoint(
+              icon: Icons.grid_view_rounded,
+              text: 'See your saved ranges any time from the grid button '
+                  'up top.',
+            ),
+            SizedBox(height: 14),
+            _IntroPoint(
+              icon: Icons.play_circle_outline,
+              text: "Auto-play keeps running even when you're not seated at "
+                  'the table — watch the level badge.',
+            ),
+          ],
+        ),
+        actions: [
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: AppColors.goldDeep),
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Got it',
+                style: TextStyle(fontWeight: FontWeight.w800)),
+          ),
+        ],
+      ),
+    );
   }
 
   /// Build (or reuse) the trainer controller for a level and load its line.
@@ -589,6 +651,35 @@ class _AutoBadge extends StatelessWidget {
           .fadeIn(duration: 300.ms);
     }
     return const SizedBox.shrink();
+  }
+}
+
+/// One bullet in the how-to-play intro dialog: an icon + a line of text.
+class _IntroPoint extends StatelessWidget {
+  const _IntroPoint({required this.icon, required this.text});
+
+  final IconData icon;
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(icon, color: AppColors.goldBright, size: 20),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Text(
+            text,
+            style: const TextStyle(
+              color: AppColors.textPrimary,
+              fontSize: 13.5,
+              height: 1.3,
+            ),
+          ),
+        ),
+      ],
+    );
   }
 }
 

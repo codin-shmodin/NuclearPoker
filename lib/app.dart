@@ -34,6 +34,10 @@ class _GateState extends State<_Gate> {
   Identity? _identity;
   bool _loading = true;
 
+  /// True only right after a fresh registration (not when auto-resuming a saved
+  /// account), so the how-to-play intro pops once for new players.
+  bool _justRegistered = false;
+
   @override
   void initState() {
     super.initState();
@@ -48,7 +52,12 @@ class _GateState extends State<_Gate> {
 
   Future<void> _register(String username, String password) async {
     final id = await _accounts.register(username, password);
-    if (mounted) setState(() => _identity = id);
+    if (mounted) {
+      setState(() {
+        _identity = id;
+        _justRegistered = true;
+      });
+    }
   }
 
   @override
@@ -62,6 +71,10 @@ class _GateState extends State<_Gate> {
     final id = _identity;
     if (id == null) return RegisterScreen(onSubmit: _register);
     // Re-key the map per account so switching users loads the right data.
-    return AdventureMapScreen(key: ValueKey(id.namespace), identity: id);
+    return AdventureMapScreen(
+      key: ValueKey(id.namespace),
+      identity: id,
+      showIntro: _justRegistered,
+    );
   }
 }
