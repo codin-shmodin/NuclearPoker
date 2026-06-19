@@ -31,6 +31,7 @@ class AdventureMapScreen extends StatefulWidget {
     this.store,
     this.identity = const Identity('guest', ''),
     this.showIntro = false,
+    this.onLogout,
   });
 
   /// Injectable for tests; defaults to the on-device prefs store.
@@ -43,6 +44,9 @@ class AdventureMapScreen extends StatefulWidget {
   /// Show the one-time how-to-play intro once the map appears (set right after a
   /// fresh registration).
   final bool showIntro;
+
+  /// Sign out and return to the register screen. Null in tests.
+  final VoidCallback? onLogout;
 
   @override
   State<AdventureMapScreen> createState() => _AdventureMapScreenState();
@@ -249,6 +253,7 @@ class _AdventureMapScreenState extends State<AdventureMapScreen> {
                                 RangeChartScreen(lineStore: _lineStore),
                           ),
                         ),
+                        onLogout: widget.onLogout,
                       ),
                     ),
                     if (_rewardBurst != null)
@@ -353,12 +358,14 @@ class _Hud extends StatelessWidget {
     required this.total,
     required this.coins,
     required this.onRangeChart,
+    this.onLogout,
   });
 
   final int completed;
   final int total;
   final int coins;
   final VoidCallback onRangeChart;
+  final VoidCallback? onLogout;
 
   @override
   Widget build(BuildContext context) {
@@ -421,6 +428,13 @@ class _Hud extends StatelessWidget {
             icon: const Icon(Icons.grid_view_rounded,
                 color: AppColors.textPrimary),
           ),
+          if (onLogout != null)
+            IconButton(
+              tooltip: 'Log out',
+              onPressed: onLogout,
+              icon: const Icon(Icons.logout_rounded,
+                  color: AppColors.textPrimary),
+            ),
         ],
       ),
     );

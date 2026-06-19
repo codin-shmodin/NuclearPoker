@@ -60,6 +60,16 @@ class _GateState extends State<_Gate> {
     }
   }
 
+  Future<void> _logout() async {
+    await _accounts.signOut();
+    if (mounted) {
+      setState(() {
+        _identity = null;
+        _justRegistered = false;
+      });
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_loading) {
@@ -75,6 +85,7 @@ class _GateState extends State<_Gate> {
       key: ValueKey(id.namespace),
       identity: id,
       showIntro: _justRegistered,
+      onLogout: _logout,
     );
   }
 }
