@@ -47,21 +47,21 @@ const List<LevelDef> kLevels = [
     title: 'The Rookie',
     botProfileId: 'rock',
     rewardId: '⚛️',
-    mapPosition: Offset(0.28, 0.90),
+    mapPosition: Offset(0.30, 0.13),
   ),
   LevelDef(
     id: 2,
     title: 'The Maniac',
     botProfileId: 'maniac',
     rewardId: '⚪',
-    mapPosition: Offset(0.70, 0.58),
+    mapPosition: Offset(0.68, 0.46),
   ),
   LevelDef(
     id: 3,
     title: 'The Shark',
     botProfileId: 'pro',
     rewardId: '🔶',
-    mapPosition: Offset(0.34, 0.24),
+    mapPosition: Offset(0.32, 0.80),
   ),
 ];
 

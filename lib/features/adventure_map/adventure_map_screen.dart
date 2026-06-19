@@ -8,6 +8,16 @@ import 'level.dart';
 import 'line_store.dart';
 import 'progress_store.dart';
 
+// ---- Desert palette (placeholder art) -------------------------------------
+const Color _skyTop = Color(0xFFF6DCA6);
+const Color _skyHorizon = Color(0xFFE7B36A);
+const Color _sandBase = Color(0xFFD49A52);
+const Color _duneLight = Color(0xFFEAC585);
+const Color _duneMid = Color(0xFFCF9A52);
+const Color _duneDark = Color(0xFFB57D3C);
+const Color _sunColor = Color(0xFFF9E6A8);
+const Color _trailBrown = Color(0xFF8A5A2B);
+
 /// The Candy-Crush-style level map — the app's home screen. A scrolling path of
 /// nodes, one per [LevelDef]; beating a level (busting its bot) unlocks the next.
 /// Art is placeholder (gradient + dotted trail + gold badges); the layout
@@ -56,12 +66,6 @@ class _AdventureMapScreenState extends State<AdventureMapScreen> {
       _progress = progress;
       _loading = false;
     });
-    // Start the view at the bottom — the journey begins at level 1.
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_scroll.hasClients) {
-        _scroll.jumpTo(_scroll.position.maxScrollExtent);
-      }
-    });
   }
 
   Future<void> _launchLevel(LevelDef level) async {
@@ -71,7 +75,7 @@ class _AdventureMapScreenState extends State<AdventureMapScreen> {
         builder: (_) => HeadsUpScreen(
           profile: botProfileFor(level.botProfileId),
           startingStack: level.startingStack,
-          levelTitle: level.title,
+          levelTitle: botProfileFor(level.botProfileId).name,
           levelId: level.id,
           // Save-line + auto-play unlock once you've already cleared this level.
           autoPlayUnlocked: wasCompleted,
@@ -103,30 +107,39 @@ class _AdventureMapScreenState extends State<AdventureMapScreen> {
           gradient: LinearGradient(
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
-            colors: [AppColors.backgroundTop, AppColors.background],
+            colors: [_skyTop, _skyHorizon, _sandBase],
+            stops: [0.0, 0.32, 1.0],
           ),
         ),
         child: SafeArea(
           child: _loading
               ? const Center(
-                  child: CircularProgressIndicator(color: AppColors.gold))
+                  child: CircularProgressIndicator(color: _trailBrown))
               : Stack(
                   children: [
                     _buildMap(),
-                    _Hud(
-                      completed: _progress.completedLevelIds.length,
-                      total: kLevels.length,
-                      rewards: [
-                        for (final l in kLevels)
-                          if (_progress.isCompleted(l.id)) l.rewardId,
-                      ],
-                      onPractice: () => Navigator.of(context).push(
-                        MaterialPageRoute<void>(
-                          builder: (_) => const BotPickerScreen(),
+                    // HUD is anchored to a top band — it must NOT fill the Stack,
+                    // or it would swallow taps/scroll over the whole map.
+                    Positioned(
+                      top: 0,
+                      left: 0,
+                      right: 0,
+                      child: _Hud(
+                        completed: _progress.completedLevelIds.length,
+                        total: kLevels.length,
+                        rewards: [
+                          for (final l in kLevels)
+                            if (_progress.isCompleted(l.id)) l.rewardId,
+                        ],
+                        onPractice: () => Navigator.of(context).push(
+                          MaterialPageRoute<void>(
+                            builder: (_) => const BotPickerScreen(),
+                          ),
                         ),
                       ),
                     ),
-                    if (_rewardBurst != null) _rewardBurstOverlay(_rewardBurst!),
+                    if (_rewardBurst != null)
+                      _rewardBurstOverlay(_rewardBurst!),
                   ],
                 ),
         ),
@@ -138,8 +151,9 @@ class _AdventureMapScreenState extends State<AdventureMapScreen> {
     return LayoutBuilder(
       builder: (context, constraints) {
         final w = constraints.maxWidth;
-        // Taller than the screen so the path feels like a journey to scroll up.
-        final h = (constraints.maxHeight * 1.9).clamp(720.0, double.infinity);
+        // Taller than the screen so the path is a journey — scroll DOWN past
+        // level 1 to see the later levels waiting, still locked.
+        final h = (constraints.maxHeight * 1.8).clamp(820.0, double.infinity);
         return SingleChildScrollView(
           controller: _scroll,
           child: SizedBox(
@@ -148,14 +162,16 @@ class _AdventureMapScreenState extends State<AdventureMapScreen> {
             child: Stack(
               children: [
                 Positioned.fill(
+                  child: CustomPaint(painter: _DesertPainter()),
+                ),
+                Positioned.fill(
                   child: CustomPaint(
                     painter: _TrailPainter(
                       [for (final l in kLevels) l.mapPosition],
                     ),
                   ),
                 ),
-                for (final level in kLevels)
-                  _positionedNode(level, Size(w, h)),
+                for (final level in kLevels) _positionedNode(level, Size(w, h)),
               ],
             ),
           ),
@@ -200,7 +216,8 @@ class _AdventureMapScreenState extends State<AdventureMapScreen> {
               )
               .fadeIn(duration: 200.ms)
               .then(delay: 350.ms)
-              .moveY(begin: 0, end: -160, duration: 600.ms, curve: Curves.easeIn)
+              .moveY(
+                  begin: 0, end: -160, duration: 600.ms, curve: Curves.easeIn)
               .fadeOut(duration: 600.ms),
         ),
       ),
@@ -224,69 +241,66 @@ class _Hud extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Align(
-      alignment: Alignment.topCenter,
-      child: Container(
-        padding: const EdgeInsets.fromLTRB(20, 12, 16, 14),
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: [
-              AppColors.backgroundTop,
-              AppColors.backgroundTop.withValues(alpha: 0.0),
-            ],
-          ),
-        ),
-        child: Row(
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Row(
-                    children: [
-                      Text('☢️', style: TextStyle(fontSize: 26)),
-                      SizedBox(width: 8),
-                      Text(
-                        'NUCLEAR',
-                        style: TextStyle(
-                          fontSize: 22,
-                          fontWeight: FontWeight.w900,
-                          letterSpacing: 1.5,
-                          color: AppColors.goldBright,
-                        ),
-                      ),
-                      Text(
-                        'POKER',
-                        style: TextStyle(
-                          fontSize: 22,
-                          fontWeight: FontWeight.w300,
-                          letterSpacing: 1.5,
-                          color: AppColors.textPrimary,
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    'Climb the ladder · $completed / $total cleared',
-                    style: const TextStyle(
-                        color: AppColors.textMuted, fontSize: 12),
-                  ),
-                ],
-              ),
-            ),
-            _RewardTray(rewards: rewards),
-            const SizedBox(width: 4),
-            IconButton(
-              tooltip: 'Free play',
-              onPressed: onPractice,
-              icon: const Icon(Icons.sports_esports,
-                  color: AppColors.textPrimary),
-            ),
+    return Container(
+      padding: const EdgeInsets.fromLTRB(20, 12, 16, 14),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [
+            _skyTop,
+            _skyTop.withValues(alpha: 0.0),
           ],
         ),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Row(
+                  children: [
+                    Text('☢️', style: TextStyle(fontSize: 26)),
+                    SizedBox(width: 8),
+                    Text(
+                      'NUCLEAR',
+                      style: TextStyle(
+                        fontSize: 22,
+                        fontWeight: FontWeight.w900,
+                        letterSpacing: 1.5,
+                        color: AppColors.goldBright,
+                      ),
+                    ),
+                    Text(
+                      'POKER',
+                      style: TextStyle(
+                        fontSize: 22,
+                        fontWeight: FontWeight.w300,
+                        letterSpacing: 1.5,
+                        color: AppColors.textPrimary,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  'Climb the ladder · $completed / $total cleared',
+                  style:
+                      const TextStyle(color: AppColors.textMuted, fontSize: 12),
+                ),
+              ],
+            ),
+          ),
+          _RewardTray(rewards: rewards),
+          const SizedBox(width: 4),
+          IconButton(
+            tooltip: 'Free play',
+            onPressed: onPractice,
+            icon:
+                const Icon(Icons.sports_esports, color: AppColors.textPrimary),
+          ),
+        ],
       ),
     );
   }
@@ -345,18 +359,9 @@ class _LevelNode extends StatelessWidget {
       children: [
         _badge(),
         const SizedBox(height: 6),
-        Text(
-          level.title,
-          textAlign: TextAlign.center,
-          maxLines: 2,
-          overflow: TextOverflow.ellipsis,
-          style: TextStyle(
-            fontSize: 13,
-            fontWeight: FontWeight.w800,
-            color: status == LevelStatus.locked
-                ? AppColors.textMuted
-                : AppColors.textPrimary,
-          ),
+        _NameTag(
+          name: botProfileFor(level.botProfileId).name,
+          locked: status == LevelStatus.locked,
         ),
       ],
     );
@@ -373,8 +378,10 @@ class _LevelNode extends StatelessWidget {
     if (justUnlocked) {
       return tappable
           .animate()
-          .scaleXY(begin: 0.6, end: 1, duration: 500.ms, curve: Curves.easeOutBack)
-          .shimmer(delay: 200.ms, duration: 900.ms, color: AppColors.goldBright);
+          .scaleXY(
+              begin: 0.6, end: 1, duration: 500.ms, curve: Curves.easeOutBack)
+          .shimmer(
+              delay: 200.ms, duration: 900.ms, color: AppColors.goldBright);
     }
     return tappable;
   }
@@ -450,8 +457,80 @@ class _LevelNode extends StatelessWidget {
   }
 }
 
-/// The dotted gold trail connecting the level nodes, drawn through their
-/// normalized centers in id order. Baked into real background art later.
+/// A name label under a node, on a translucent pill so it stays readable over
+/// the bright sand.
+class _NameTag extends StatelessWidget {
+  const _NameTag({required this.name, required this.locked});
+
+  final String name;
+  final bool locked;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+      decoration: BoxDecoration(
+        color: const Color(0xFF3A2A1A).withValues(alpha: locked ? 0.35 : 0.6),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Text(
+        name,
+        textAlign: TextAlign.center,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: TextStyle(
+          fontSize: 14,
+          fontWeight: FontWeight.w900,
+          letterSpacing: 0.5,
+          color: locked ? const Color(0xFFE7D6BE) : Colors.white,
+        ),
+      ),
+    );
+  }
+}
+
+/// A simple desert backdrop: a warm sun and layered dunes down the canvas.
+/// Placeholder art — swapped for a real image later with no layout change.
+class _DesertPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    // Sun, high on the right.
+    canvas.drawCircle(
+      Offset(size.width * 0.76, size.height * 0.07),
+      size.width * 0.14,
+      Paint()..color = _sunColor.withValues(alpha: 0.85),
+    );
+
+    // Stacked dune bands, alternating tones, each a gentle wave.
+    const tones = [_duneLight, _duneMid, _duneDark, _duneMid, _duneLight];
+    final amp = size.height * 0.035;
+    for (var i = 0; i < tones.length; i++) {
+      final baseY = size.height * (0.20 + i * 0.16);
+      final paint = Paint()
+        ..color = tones[i].withValues(alpha: 0.55)
+        ..style = PaintingStyle.fill;
+      final path = Path()..moveTo(0, baseY);
+      const waves = 3;
+      for (var x = 0; x < waves; x++) {
+        final cx = size.width * ((x + 0.5) / waves);
+        final cy = baseY + (x.isEven ? -amp : amp);
+        final ex = size.width * ((x + 1) / waves);
+        path.quadraticBezierTo(cx, cy, ex, baseY);
+      }
+      path
+        ..lineTo(size.width, size.height)
+        ..lineTo(0, size.height)
+        ..close();
+      canvas.drawPath(path, paint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(_DesertPainter oldDelegate) => false;
+}
+
+/// The dotted trail connecting the level nodes, drawn through their normalized
+/// centers in id order. Baked into real background art later.
 class _TrailPainter extends CustomPainter {
   _TrailPainter(this.normalizedPoints);
 
@@ -475,7 +554,7 @@ class _TrailPainter extends CustomPainter {
     }
 
     final dot = Paint()
-      ..color = AppColors.gold.withValues(alpha: 0.5)
+      ..color = _trailBrown.withValues(alpha: 0.55)
       ..style = PaintingStyle.fill;
     for (final metric in path.computeMetrics()) {
       var d = 0.0;
