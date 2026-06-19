@@ -49,9 +49,11 @@ class RangeBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     // Which buckets actually appear in the in-range cells (for the legend).
+    // The neutral grey `shown` bucket is self-explanatory (it's just the bot's
+    // range), so we don't bother labelling it.
     final legend = <RangeBucket>{
       for (final c in cells)
-        if (c.inRange) c.bucket,
+        if (c.inRange && c.bucket != RangeBucket.shown) c.bucket,
     }.toList();
 
     return Container(

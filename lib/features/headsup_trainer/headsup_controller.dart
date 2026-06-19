@@ -12,6 +12,7 @@ import '../../engine/game/rule_config.dart';
 import '../../engine/game/seat.dart';
 import '../../engine/players/bot_profile.dart';
 import '../../engine/players/range_bot.dart' show BotMove;
+import 'human_line.dart';
 
 /// How a rank is coloured on the range bar. `check/fold/call/pot/allIn` are the
 /// bot's *action* with that card (`allIn` is a pot bet/raise that commits its
@@ -73,8 +74,14 @@ class CompoundPlan {
 /// [BotProfile]. Play, the narration, the range bar and the EV hint all read
 /// the *same* profile, so what the bar predicts is exactly what the bot does.
 class HeadsUpController extends ChangeNotifier {
-  HeadsUpController({BotProfile? profile, int? seed, int startingStack = 50})
-      : profile = profile ?? BotProfile.pro,
+  HeadsUpController({
+    BotProfile? profile,
+    int? seed,
+    int startingStack = 50,
+    this.autoPlayUnlocked = false,
+    HumanLine? initialLine,
+  })  : profile = profile ?? BotProfile.pro,
+        savedLine = initialLine ?? HumanLine(),
         rules = RuleConfig(
           startingStack: startingStack,
           smallBlind: 1,
@@ -125,6 +132,28 @@ class HeadsUpController extends ChangeNotifier {
   bool rangeOn = true; // show the range bar
   bool advancedOn = false; // two-step "advanced" action plans
 
+  /// Whether the "automate your range" features (save-line + auto-play) are
+  /// available here. Unlocked once the level has been beaten (see
+  /// docs/expansion-plans.md §1); always false in free-play.
+  final bool autoPlayUnlocked;
+
+  /// The "Auto" toggle: when on (and a move is saved for the spot) the player's
+  /// saved line is played out for them, hand after hand, at a watchable pace.
+  bool autoPlayOn = false;
+
+  /// The player's saved strategy for this level — grows each time they capture a
+  /// hand with [saveLine]. Persisted by the screen via [onLineChanged].
+  HumanLine savedLine;
+
+  /// Persistence hook, set by the screen: called after [saveLine] mutates
+  /// [savedLine] so the new line is written to disk.
+  VoidCallback? onLineChanged;
+
+  // The decisions captured in the *current* hand, committed into [savedLine]
+  // only when the player hits "Save line".
+  HumanLine _pendingLine = HumanLine();
+  bool _lineSaved = false;
+
   /// The action the player is hovering, if any — drives which action's EV the
   /// hint bar shows. Exactly one of [hoveredAction] / [hoveredPlan] is non-null.
   ActionType? hoveredAction;
@@ -150,6 +179,38 @@ class HeadsUpController extends ChangeNotifier {
     hoveredAction = null;
     hoveredPlan = null;
     _rebuildRange();
+    notifyListeners();
+  }
+
+  void toggleAutoPlay(bool v) {
+    autoPlayOn = v;
+    notifyListeners();
+    if (v) _maybeAutoStep(); // kick it off if it's already our turn
+  }
+
+  /// Replace the saved line (used by the screen once it has loaded the level's
+  /// line from disk).
+  void setSavedLine(HumanLine line) {
+    savedLine = line;
+    notifyListeners();
+  }
+
+  /// Whether there's a fresh, unsaved capture to commit right now.
+  bool get canSaveLine =>
+      autoPlayUnlocked && handOver && !_pendingLine.isEmpty && !_lineSaved;
+
+  /// Whether the current hand's capture has already been saved.
+  bool get lineSaved => _lineSaved;
+
+  /// How many (spot, card) decisions the saved line currently covers.
+  int get savedMoveCount => savedLine.count;
+
+  /// Commit the current hand's captured decisions into [savedLine] and persist.
+  void saveLine() {
+    if (!canSaveLine) return;
+    savedLine.merge(_pendingLine);
+    _lineSaved = true;
+    onLineChanged?.call();
     notifyListeners();
   }
 
@@ -196,6 +257,8 @@ class HeadsUpController extends ChangeNotifier {
     revealShowdown = false;
     hoveredAction = null;
     hoveredPlan = null;
+    _pendingLine = HumanLine(); // fresh capture for the new hand
+    _lineSaved = false;
     _button = (_button + 1) % 2; // switch positions each hand
     _botRange
       ..clear()
@@ -228,10 +291,35 @@ class HeadsUpController extends ChangeNotifier {
     if (!isHumanTurn) return;
     hoveredAction = null;
     hoveredPlan = null;
+    _capture(action);
     _engine.applyAction(state, action);
     _rebuildRange();
     notifyListeners();
     _run();
+  }
+
+  /// Capture a human decision into the current hand's pending line, keyed by the
+  /// spot ([BetNode]) and our card. Read *before* the action is applied, so the
+  /// node reflects what we're facing. No-op if the feature is locked.
+  void _capture(GameAction action) {
+    if (!autoPlayUnlocked) return;
+    final card = seats[humanSeat].card;
+    if (card == null || state.toAct != humanSeat) return;
+    _pendingLine.record(
+        _nodeForSeat(humanSeat), card.rank.value, _moveOf(action));
+  }
+
+  BotMove _moveOf(GameAction action) {
+    switch (action.type) {
+      case ActionType.fold:
+        return BotMove.fold;
+      case ActionType.check:
+        return BotMove.check;
+      case ActionType.call:
+        return BotMove.call;
+      case ActionType.bet:
+        return BotMove.pot;
+    }
   }
 
   /// Play a two-step "advanced" plan, narrating each move at a watchable pace:
@@ -245,7 +333,9 @@ class HeadsUpController extends ChangeNotifier {
     hoveredPlan = null;
     busy = true;
 
-    _engine.applyAction(state, _planFirst(plan.first));
+    final firstAction = _planFirst(plan.first);
+    _capture(firstAction);
+    _engine.applyAction(state, firstAction);
     _rebuildRange();
     notifyListeners();
     await Future<void>.delayed(_stepDelay);
@@ -257,7 +347,9 @@ class HeadsUpController extends ChangeNotifier {
       final v = humanView;
       if (v != null) {
         await Future<void>.delayed(_stepDelay);
-        _engine.applyAction(state, _planSecond(plan.second, v));
+        final secondAction = _planSecond(plan.second, v);
+        _capture(secondAction);
+        _engine.applyAction(state, secondAction);
         _rebuildRange();
         notifyListeners();
         await Future<void>.delayed(_stepDelay);
@@ -326,6 +418,56 @@ class HeadsUpController extends ChangeNotifier {
     }
     _rebuildRange();
     notifyListeners();
+    await _afterSettle();
+  }
+
+  /// Auto-play hook, run at the end of every settle. With auto-play on we either
+  /// play our saved move for the current spot, or — when the hand is over and we
+  /// never had to step in by hand — deal the next hand so the line keeps playing.
+  Future<void> _afterSettle() async {
+    if (!autoPlayOn) return;
+    if (isHumanTurn) {
+      await _maybeAutoStep();
+      return;
+    }
+    // Hand finished cleanly under auto-play (no manual decision to save) → keep
+    // the line rolling. If we *did* step in, _pendingLine isn't empty, so we
+    // stop and let the player hit Save.
+    if (handOver && !sessionOver && _pendingLine.isEmpty) {
+      await Future<void>.delayed(_revealDelay);
+      if (autoPlayOn && handOver && !sessionOver) startHand();
+    }
+  }
+
+  /// If it's our turn and the saved line covers this spot, play that move at a
+  /// watchable pace and run the rest of the hand out. If the spot isn't covered,
+  /// hand control back to the player (and let them capture it).
+  Future<void> _maybeAutoStep() async {
+    if (!autoPlayOn || !isHumanTurn) return;
+    final card = seats[humanSeat].card;
+    final node = _nodeForSeat(humanSeat);
+    final move = card == null ? null : savedLine.moveAt(node, card.rank.value);
+    if (move == null) {
+      statusMessage = 'Auto-play: no saved move for this spot — your call.';
+      notifyListeners();
+      return;
+    }
+    busy = true;
+    statusMessage = 'Auto-playing your saved line…';
+    _rebuildRange();
+    notifyListeners();
+    await Future<void>.delayed(_stepDelay);
+    final view = humanView;
+    if (view == null) {
+      busy = false;
+      notifyListeners();
+      return;
+    }
+    _engine.applyAction(state, _moveAction(move, view));
+    _rebuildRange();
+    notifyListeners();
+    await _botRespond();
+    await _settle(); // recurses through _afterSettle for any further spots
   }
 
   /// The betting node the bot is currently at (or would face).
@@ -440,7 +582,7 @@ class HeadsUpController extends ChangeNotifier {
 
     // Call, or a check that ends the hand → it's a showdown. The range bar shows
     // only the range (neutral grey) — never a win/lose/split matchup.
-    rangeTitle = action == ActionType.call ? 'If you CALL:' : 'At showdown:';
+    rangeTitle = "${profile.name}'s range";
     botSpeech = _matchupSpeech();
     rangeCells = _cells(neutral: true);
   }
