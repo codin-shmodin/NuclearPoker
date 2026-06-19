@@ -476,6 +476,20 @@ class HeadsUpController extends ChangeNotifier {
   /// The node the bot would be at if the human bets/raises (pots) right now.
   BetNode _botNodeIfHumanPots() => _facingNode(state.raiseCount + 1);
 
+  /// Would the bot — with its *current* range — ever shove back if the human
+  /// pots/raises right now? When false there's no second decision to plan for:
+  /// the bot only calls or folds, so a two-step "Raise ▸ …" plan is pointless.
+  bool get botRaisesAfterPot {
+    final node = _botNodeIfHumanPots();
+    return _botRange.any((v) => profile.moveAt(node, v) == BotMove.pot);
+  }
+
+  /// Would the bot ever bet after the human checks? When false the bot just
+  /// checks behind and the hand goes to showdown, so a "Check ▸ …" plan never
+  /// triggers its second step.
+  bool get botRaisesAfterCheck =>
+      _botRange.any((v) => profile.moveAt(BetNode.checkedTo, v) == BotMove.pot);
+
   BetNode _nodeForSeat(int seatIndex) {
     final seat = state.seats[seatIndex];
     final toCall = state.currentBet - seat.committed;

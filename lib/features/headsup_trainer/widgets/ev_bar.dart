@@ -79,10 +79,13 @@ class EvBar extends StatelessWidget {
                     ),
                   ),
           ),
-          if (anyActive && average != null) ...[
+          if (anyActive) ...[
             const SizedBox(height: 4),
+            // When the bot can raise the ball back to us (most cells are "?"),
+            // there's no honest average to show — so we mark it "?" rather than
+            // averaging a misleading sliver of the range.
             Text(
-              'Avg ${_signed(average)}',
+              average != null ? 'Avg ${_signed(average)}' : 'Avg ?',
               style: const TextStyle(
                 fontSize: 10.5,
                 fontWeight: FontWeight.w700,

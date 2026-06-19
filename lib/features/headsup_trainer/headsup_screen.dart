@@ -769,6 +769,15 @@ class _BottomPanel extends StatelessWidget {
     final botChecked =
         controller.state.seats[HeadsUpController.botSeat].lastAction?.type ==
             ActionType.check;
+    // A two-step plan only makes sense if the bot would actually put the ball
+    // back. If after your raise the bot only ever calls/folds, the "Raise ▸ …"
+    // plans collapse to a plain Pot; same for "Check ▸ …" if the bot checks
+    // behind your check.
+    final raiseStep = view.canBet
+        ? (controller.botRaisesAfterPot
+            ? _raisePlans(previewOn)
+            : [_simplePotBtn(view, previewOn, dense: true)])
+        : const <Widget>[];
     if (facing) {
       return [
         _simpleBtn('Fold', AppColors.danger, ActionType.fold, controller.fold,
@@ -777,7 +786,7 @@ class _BottomPanel extends StatelessWidget {
         _simpleBtn('Call ${view.toCall}', AppColors.chipGreen, ActionType.call,
             controller.call, previewOn,
             dense: true),
-        if (view.canBet) ..._raisePlans(previewOn),
+        ...raiseStep,
       ];
     }
     if (botChecked) {
@@ -785,14 +794,27 @@ class _BottomPanel extends StatelessWidget {
         _simpleBtn('Check', AppColors.chipBlue, ActionType.check,
             controller.check, previewOn,
             dense: true),
-        if (view.canBet) ..._raisePlans(previewOn),
+        ...raiseStep,
       ];
     }
     return [
-      ..._checkPlans(previewOn),
-      if (view.canBet) ..._raisePlans(previewOn)
+      if (controller.botRaisesAfterCheck)
+        ..._checkPlans(previewOn)
+      else
+        _simpleBtn('Check', AppColors.chipBlue, ActionType.check,
+            controller.check, previewOn,
+            dense: true),
+      ...raiseStep,
     ];
   }
+
+  Widget _simplePotBtn(view, bool previewOn, {bool dense = false}) => _simpleBtn(
+      'Pot ${view.raiseTarget}',
+      AppColors.potPurpleDeep,
+      ActionType.bet,
+      controller.pot,
+      previewOn,
+      dense: dense);
 
   List<Widget> _checkPlans(bool previewOn) => [
         _planBtn(const CompoundPlan(ActionType.check, PlanReply.raise),
