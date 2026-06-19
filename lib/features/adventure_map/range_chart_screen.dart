@@ -387,11 +387,12 @@ class _RangeChartScreenState extends State<RangeChartScreen> {
 
 const double _kRowH = 38;
 
-/// An opponent action between two of your squares, drawn as a filled right-
-/// pointing block arrow with the action name inside it. A [filled] arrow is part
-/// of the line (purple for a bet/3-bet, blue for a check); a hollow one is a
-/// collapsed "they raise again" step you can tap to reveal. [onTap] is null for
-/// the BB scenario arrows, which are fixed.
+/// An opponent action between two of your squares, drawn as a traditional right-
+/// pointing arrow — a wide rectangular shaft (the "neck", holding the action
+/// name) capped by a triangular head a little wider than the shaft. A [filled]
+/// arrow is part of the line (purple for a bet/3-bet, blue for a check); a
+/// hollow one is a collapsed "they raise again" step you can tap to reveal.
+/// [onTap] is null for the BB scenario arrows, which are fixed.
 class _ArrowTag extends StatelessWidget {
   const _ArrowTag({
     required this.label,
@@ -419,10 +420,10 @@ class _ArrowTag extends StatelessWidget {
         child: CustomPaint(
           painter: _ArrowPainter(fill: fill, stroke: stroke),
           child: Container(
-            width: 50,
+            width: 52,
             height: 26,
             alignment: Alignment.center,
-            padding: const EdgeInsets.only(right: 9), // room for the head
+            padding: const EdgeInsets.only(right: 13), // room for the head
             child: Text(
               label.toUpperCase(),
               maxLines: 1,
@@ -443,8 +444,9 @@ class _ArrowTag extends StatelessWidget {
   }
 }
 
-/// Paints the block-arrow (a right-pointing pentagon): a fat body with a short
-/// triangular head, so the action label can sit inside it.
+/// Paints a traditional right-pointing arrow: a wide rectangular shaft (the
+/// "neck", which carries the label) ending in a triangular head whose base is a
+/// little wider than the shaft.
 class _ArrowPainter extends CustomPainter {
   _ArrowPainter({required this.fill, required this.stroke});
 
@@ -453,13 +455,22 @@ class _ArrowPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    const head = 9.0;
+    const head = 12.0; // triangle length
+    final neckH = size.height * 0.60; // shaft thickness — a wide neck
+    final headH = size.height * 0.92; // triangle base — a bit wider than the neck
+    final bodyRight = size.width - head;
+    final neckTop = (size.height - neckH) / 2;
+    final neckBot = neckTop + neckH;
+    final headTop = (size.height - headH) / 2;
+    final headBot = headTop + headH;
     final path = Path()
-      ..moveTo(0, 2)
-      ..lineTo(size.width - head, 2)
+      ..moveTo(0, neckTop)
+      ..lineTo(bodyRight, neckTop)
+      ..lineTo(bodyRight, headTop)
       ..lineTo(size.width, size.height / 2)
-      ..lineTo(size.width - head, size.height - 2)
-      ..lineTo(0, size.height - 2)
+      ..lineTo(bodyRight, headBot)
+      ..lineTo(bodyRight, neckBot)
+      ..lineTo(0, neckBot)
       ..close();
     if (fill.a != 0) {
       canvas.drawPath(path, Paint()..color = fill);
