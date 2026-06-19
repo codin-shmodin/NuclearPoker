@@ -538,7 +538,6 @@ class HeadsUpController extends ChangeNotifier {
       rangeTitle = "Villain's range";
       botSpeech = revealShowdown ? _resultSpeech() : '';
       rangeCells = _cells(
-        neutral: true,
         highlight: revealShowdown ? seats[botSeat].card?.rank.value : null,
       );
       return;
@@ -549,7 +548,7 @@ class HeadsUpController extends ChangeNotifier {
       final facing = node != BetNode.open && node != BetNode.checkedTo;
       rangeTitle = facing ? 'Facing your raise I would:' : 'My range';
       botSpeech = facing ? _botFacingSpeech(node) : _botOpenSpeech(node);
-      rangeCells = _cells(node: node, potAllIn: _potAllIn(state, botSeat));
+      rangeCells = _cellsForBotDecision(state);
       statusMessage = '${profile.name} is thinking…';
       return;
     }
@@ -570,27 +569,37 @@ class HeadsUpController extends ChangeNotifier {
     if (action == null || action == ActionType.fold) {
       rangeTitle = "${profile.name}'s range";
       botSpeech = 'Hover an option to see how I react.';
-      rangeCells = _cells(neutral: true);
+      rangeCells = _cells();
       return;
     }
 
-    // Betting → colour by his response to the bet/raise.
+    // Betting → colour by his response to the bet/raise. If he's already all-in
+    // (e.g. forced in by the blind) your pot can't make him act, so it's just a
+    // showdown — his whole range shows grey.
     if (action == ActionType.bet) {
-      final node = _botNodeIfHumanPots();
-      rangeTitle = 'If you POT, ${profile.name} will:';
-      botSpeech = _facingSpeech(node);
-      rangeCells = _cells(
-          node: node, potAllIn: _botPotAllInAfter(const GameAction.bet(0)));
+      final s = _botStateAfter(const GameAction.bet(0));
+      if (_botWillAct(s)) {
+        rangeTitle = 'If you POT, ${profile.name} will:';
+        botSpeech = _facingSpeech(_nodeAt(s, botSeat));
+      } else {
+        rangeTitle = "${profile.name}'s range";
+        botSpeech = _matchupSpeech();
+      }
+      rangeCells = _cellsForBotDecision(s);
       return;
     }
 
     // Checking when the bot still gets to act → colour by his check/bet choice.
     if (action == ActionType.check && !seats[botSeat].hasActed) {
-      rangeTitle = 'If you check, ${profile.name} will:';
-      botSpeech = _botOpenSpeech(BetNode.checkedTo);
-      rangeCells = _cells(
-          node: BetNode.checkedTo,
-          potAllIn: _botPotAllInAfter(const GameAction.check()));
+      final s = _botStateAfter(const GameAction.check());
+      if (_botWillAct(s)) {
+        rangeTitle = 'If you check, ${profile.name} will:';
+        botSpeech = _botOpenSpeech(BetNode.checkedTo);
+      } else {
+        rangeTitle = "${profile.name}'s range";
+        botSpeech = _matchupSpeech();
+      }
+      rangeCells = _cellsForBotDecision(s);
       return;
     }
 
@@ -598,7 +607,7 @@ class HeadsUpController extends ChangeNotifier {
     // only the range (neutral grey) — never a win/lose/split matchup.
     rangeTitle = "${profile.name}'s range";
     botSpeech = _matchupSpeech();
-    rangeCells = _cells(neutral: true);
+    rangeCells = _cells();
   }
 
   // ---- Advanced plan range view -------------------------------------------
@@ -633,7 +642,7 @@ class HeadsUpController extends ChangeNotifier {
     }
 
     final move1 = profile.moveAt(_nodeAt(s, botSeat), v);
-    final bucket1 = _bucketForMove(s, botSeat, move1);
+    final bucket1 = _liveBucket(s, v);
 
     // Split only when our planned second action is a raise and the bot's reply
     // hands the ball back, so our raise actually fires.
@@ -643,8 +652,7 @@ class HeadsUpController extends ChangeNotifier {
         _engine.applyAction(s, _heroRaiseAt(s));
         var right = RangeBucket.shown;
         if (s.phase == HandPhase.betting && s.toAct == botSeat) {
-          final move2 = profile.moveAt(_nodeAt(s, botSeat), v);
-          right = _bucketForMove(s, botSeat, move2);
+          right = _liveBucket(s, v);
         }
         return RankCell(r, true, RangeBucket.pot, false, splitRight: right);
       }
@@ -652,28 +660,54 @@ class HeadsUpController extends ChangeNotifier {
     return RankCell(r, true, bucket1, false);
   }
 
-  // ---- All-in detection ---------------------------------------------------
+  // ---- Bot-decision range cells -------------------------------------------
 
-  /// Whether, in [s] with [seat] to act, a pot-sized bet/raise is all-in (it
-  /// commits the seat's whole stack). Card-independent, so it's the same for
-  /// every rank at a node.
-  bool _potAllIn(HandState s, int seat) {
-    if (s.phase != HandPhase.betting || s.toAct != seat) return false;
-    return _moveIsAllIn(s, seat);
-  }
-
-  bool _moveIsAllIn(HandState s, int seat) {
-    final v = _engine.buildView(s, seat);
-    final me = s.seats[seat];
-    return v.canBet && v.raiseTarget >= me.committed + me.stack;
-  }
-
-  /// All-in status of the bot's pot bet in the hypothetical after we play
-  /// [heroAction] right now.
-  bool _botPotAllInAfter(GameAction heroAction) {
+  /// The state after the human plays [heroAction] right now — used to ask what
+  /// the bot would face (and whether he even gets to act) in that line.
+  HandState _botStateAfter(GameAction heroAction) {
     final s = state.clone();
     _engine.applyAction(s, heroAction);
-    return _potAllIn(s, botSeat);
+    return s;
+  }
+
+  /// Whether the bot still has a live betting decision in [s]. False once he's
+  /// all-in (e.g. forced in by the blind) or the round is over — then there's
+  /// nothing for him to do and his whole range just goes to showdown.
+  bool _botWillAct(HandState s) =>
+      s.phase == HandPhase.betting && s.toAct == botSeat;
+
+  /// Range-bar cells for the spot where the bot is about to act in [s]. If he
+  /// has no decision left, the whole range is shown neutral grey.
+  List<RankCell> _cellsForBotDecision(HandState s) {
+    if (!_botWillAct(s)) return _cells();
+    return [
+      for (final r in Rank.values.reversed)
+        RankCell(r, _botRange.contains(r.value), _liveBucket(s, r.value), false),
+    ];
+  }
+
+  /// The bucket to paint for card [v] given the bot is to act in [s] — what he
+  /// can *actually* do with his stack, not just his preferred move:
+  ///   - a raise he can only make all-in still paints as a raise (no separate
+  ///     all-in colour, and the same range as a normal raise);
+  ///   - a "raise" he's too short to make collapses into the call (all-in) or
+  ///     check he's forced into;
+  ///   - an all-in call is just a call.
+  RangeBucket _liveBucket(HandState s, int v) {
+    final me = s.seats[botSeat];
+    final toCall = s.currentBet - me.committed;
+    final canBet = me.stack > toCall;
+    switch (profile.moveAt(_nodeAt(s, botSeat), v)) {
+      case BotMove.pot:
+        if (canBet) return RangeBucket.pot;
+        return toCall > 0 ? RangeBucket.call : RangeBucket.check;
+      case BotMove.call:
+        return toCall > 0 ? RangeBucket.call : RangeBucket.check;
+      case BotMove.fold:
+        return toCall > 0 ? RangeBucket.fold : RangeBucket.check;
+      case BotMove.check:
+        return RangeBucket.check;
+    }
   }
 
   // ---- State-parameterised helpers (for hypothetical simulation) ----------
@@ -713,19 +747,6 @@ class HeadsUpController extends ChangeNotifier {
         : (toCall > 0 ? const GameAction.call(0) : const GameAction.check());
   }
 
-  RangeBucket _bucketForMove(HandState s, int seat, BotMove move) {
-    switch (move) {
-      case BotMove.pot:
-        return _moveIsAllIn(s, seat) ? RangeBucket.allIn : RangeBucket.pot;
-      case BotMove.call:
-        return RangeBucket.call;
-      case BotMove.fold:
-        return RangeBucket.fold;
-      case BotMove.check:
-        return RangeBucket.check;
-    }
-  }
-
   String _matchupSpeech() {
     final h = seats[humanSeat].card?.rank.value;
     if (h == null) return '';
@@ -747,34 +768,19 @@ class HeadsUpController extends ChangeNotifier {
     return parts.isEmpty ? '…' : 'You ${_join(parts)}.';
   }
 
-  List<RankCell> _cells(
-      {BetNode? node,
-      bool neutral = false,
-      int? highlight,
-      bool potAllIn = false}) {
+  /// The bot's whole range shown neutral grey — for showdowns and any spot
+  /// where he has no live decision. [highlight] outlines a revealed card.
+  List<RankCell> _cells({int? highlight}) {
     final ranks = Rank.values.reversed.toList(); // A (top) → 2 (bottom)
     return [
       for (final r in ranks)
         RankCell(
           r,
           _botRange.contains(r.value),
-          neutral ? RangeBucket.shown : _bucketFor(r.value, node!, potAllIn),
+          RangeBucket.shown,
           highlight != null && r.value == highlight,
         ),
     ];
-  }
-
-  RangeBucket _bucketFor(int v, BetNode node, bool potAllIn) {
-    switch (profile.moveAt(node, v)) {
-      case BotMove.pot:
-        return potAllIn ? RangeBucket.allIn : RangeBucket.pot;
-      case BotMove.call:
-        return RangeBucket.call;
-      case BotMove.fold:
-        return RangeBucket.fold;
-      case BotMove.check:
-        return RangeBucket.check;
-    }
   }
 
   // ---- EV hint ------------------------------------------------------------
