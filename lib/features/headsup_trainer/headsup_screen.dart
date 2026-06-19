@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 
+import '../../engine/cards/card.dart';
 import '../../engine/ev/immediate_ev.dart' show PlanReply;
 import '../../engine/game/action.dart';
 import '../../engine/game/hand_state.dart';
@@ -646,13 +647,25 @@ class _BottomPanel extends StatelessWidget {
     final live = !controller.handOver && controller.isHumanTurn && view != null;
     final buttons = live ? _liveButtons(view) : const <Widget>[];
     final twoRows = buttons.length > 4;
+    // The save-line prompt (card + colored action blocks) is taller than a row
+    // of buttons, so it gets its own height.
+    final savePrompt = controller.handOver &&
+        !controller.autoAdvancing &&
+        controller.canSaveLine &&
+        !controller.sessionOver;
+    final height = savePrompt ? 124.0 : (twoRows ? 132.0 : 78.0);
     return Container(
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 18),
-      height: twoRows ? 132 : 78,
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 14),
+      height: height,
       child: controller.handOver
           // Auto-play is about to deal the next hand itself — don't flash a
           // manual "Next Hand" button in the gap.
-          ? (controller.autoAdvancing ? _waiting() : _endControls())
+          ? (controller.autoAdvancing
+              ? _waiting()
+              : savePrompt
+                  ? _SaveLinePrompt(
+                      controller: controller, onDecline: controller.startHand)
+                  : _primaryEndButton())
           : live
               ? _layout(buttons, twoRows)
               : _waiting(),
@@ -691,24 +704,6 @@ class _BottomPanel extends StatelessWidget {
           ],
         ],
       );
-
-  Widget _endControls() {
-    final primary = _primaryEndButton();
-    // Offer to capture the hand you just played as a saved line (only on a
-    // cleared level, and only when there's a fresh decision to save).
-    if (controller.autoPlayUnlocked &&
-        (controller.canSaveLine || controller.lineSaved)) {
-      return Row(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Expanded(child: _SaveLineButton(controller: controller)),
-          const SizedBox(width: 8),
-          Expanded(child: primary),
-        ],
-      );
-    }
-    return primary;
-  }
 
   Widget _primaryEndButton() {
     if (controller.sessionOver) {
@@ -988,32 +983,199 @@ class _FullButton extends StatelessWidget {
   }
 }
 
-/// End-of-hand "capture this hand into my saved line" button. Greys out into a
-/// confirmation once tapped (the line is bound to the spots you just played).
-class _SaveLineButton extends StatelessWidget {
-  const _SaveLineButton({required this.controller});
+/// End-of-hand prompt: save the line you just played, or decline. The save
+/// button *is* the line — your card followed by a row of colour-coded blocks,
+/// one per action in play order (yours and the bot's). "Don't save line"
+/// dismisses and deals the next hand.
+class _SaveLinePrompt extends StatelessWidget {
+  const _SaveLinePrompt({required this.controller, required this.onDecline});
 
   final HeadsUpController controller;
+  final VoidCallback onDecline;
 
   @override
   Widget build(BuildContext context) {
-    final saved = controller.lineSaved;
-    return FilledButton(
-      style: FilledButton.styleFrom(
-        backgroundColor: saved ? AppColors.feltLight : AppColors.potPurpleDeep,
-        disabledBackgroundColor: AppColors.feltLight,
-        padding: const EdgeInsets.symmetric(vertical: 16),
-        shape:
-            RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-      ),
-      onPressed: saved ? null : controller.saveLine,
-      child: Text(
-        saved ? '✓ Line saved' : '💾 Save line',
-        textAlign: TextAlign.center,
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        style: const TextStyle(fontWeight: FontWeight.w800),
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Expanded(
+          flex: 3,
+          child: _LineButton(
+            card: controller.state.seats[HeadsUpController.humanSeat].card,
+            steps: controller.handLog,
+            botName: controller.profile.name,
+            onTap: controller.saveLine,
+          ),
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          flex: 2,
+          child: FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: AppColors.feltLight,
+              foregroundColor: AppColors.textPrimary,
+              padding: const EdgeInsets.symmetric(vertical: 12),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(14),
+                side: const BorderSide(color: Colors.white24),
+              ),
+            ),
+            onPressed: onDecline,
+            child: const Text(
+              "Don't save line",
+              textAlign: TextAlign.center,
+              maxLines: 2,
+              style: TextStyle(fontWeight: FontWeight.w800, height: 1.1),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// The graphical "save this line" button: the player's card + a row of action
+/// blocks (one per move this hand, in order). The whole thing is tappable.
+class _LineButton extends StatelessWidget {
+  const _LineButton({
+    required this.card,
+    required this.steps,
+    required this.botName,
+    required this.onTap,
+  });
+
+  final PlayingCard? card;
+  final List<LineStep> steps;
+  final String botName;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(14),
+        onTap: onTap,
+        child: Ink(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+          decoration: BoxDecoration(
+            color: AppColors.potPurpleDeep.withValues(alpha: 0.9),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: Colors.white, width: 2),
+          ),
+          child: Row(
+            children: [
+              const Text('💾 ', style: TextStyle(fontSize: 16)),
+              if (card != null) ...[
+                PlayingCardWidget(card: card, faceUp: true, width: 32),
+                const SizedBox(width: 8),
+              ],
+              Expanded(
+                child: SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    children: [
+                      for (var i = 0; i < steps.length; i++) ...[
+                        if (i > 0)
+                          const Icon(Icons.chevron_right,
+                              size: 14, color: Colors.white54),
+                        _ActionBlock(step: steps[i], botName: botName),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(width: 6),
+              const Text(
+                'SAVE\nLINE',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 9,
+                  height: 1.05,
+                  letterSpacing: 0.5,
+                  fontWeight: FontWeight.w800,
+                  color: Colors.white,
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
+  }
+}
+
+/// One coloured block in the line strip: the action, tinted by its kind, tagged
+/// with who made it (you / the bot).
+class _ActionBlock extends StatelessWidget {
+  const _ActionBlock({required this.step, required this.botName});
+
+  final LineStep step;
+  final String botName;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = _actionColor(step.type);
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 2),
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 4),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.9),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(
+          color: step.isHuman ? Colors.white : Colors.black38,
+          width: step.isHuman ? 2 : 1,
+        ),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            step.isHuman ? 'YOU' : botName.toUpperCase(),
+            style: const TextStyle(
+              fontSize: 7,
+              letterSpacing: 0.5,
+              fontWeight: FontWeight.w700,
+              color: Colors.white,
+            ),
+          ),
+          Text(
+            _actionLabel(step.type),
+            style: const TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w900,
+              color: Colors.white,
+              height: 1.1,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+Color _actionColor(ActionType type) {
+  switch (type) {
+    case ActionType.bet:
+      return AppColors.potPurple;
+    case ActionType.call:
+      return AppColors.chipGreen;
+    case ActionType.check:
+      return AppColors.chipBlue;
+    case ActionType.fold:
+      return AppColors.danger;
+  }
+}
+
+String _actionLabel(ActionType type) {
+  switch (type) {
+    case ActionType.bet:
+      return 'POT';
+    case ActionType.call:
+      return 'CALL';
+    case ActionType.check:
+      return 'CHECK';
+    case ActionType.fold:
+      return 'FOLD';
   }
 }

@@ -70,6 +70,15 @@ class CompoundPlan {
   int get hashCode => Object.hash(first, second);
 }
 
+/// One move in the just-played hand, in play order — who acted and what they
+/// did. Used to render the "line" preview on the save-line button.
+class LineStep {
+  const LineStep(this.isHuman, this.type);
+
+  final bool isHuman;
+  final ActionType type;
+}
+
 /// Drives the heads-up trainer: the human defends against a fully transparent
 /// [BotProfile]. Play, the narration, the range bar and the EV hint all read
 /// the *same* profile, so what the bar predicts is exactly what the bot does.
@@ -153,6 +162,10 @@ class HeadsUpController extends ChangeNotifier {
   // only when the player hits "Save line".
   HumanLine _pendingLine = HumanLine();
   bool _lineSaved = false;
+
+  /// Every move of the current hand in play order (both seats), for the save
+  /// button's line preview. Reset each hand.
+  final List<LineStep> handLog = [];
 
   /// The action the player is hovering, if any — drives which action's EV the
   /// hint bar shows. Exactly one of [hoveredAction] / [hoveredPlan] is non-null.
@@ -265,6 +278,7 @@ class HeadsUpController extends ChangeNotifier {
     hoveredPlan = null;
     _pendingLine = HumanLine(); // fresh capture for the new hand
     _lineSaved = false;
+    handLog.clear();
     _button = (_button + 1) % 2; // switch positions each hand
     _botRange
       ..clear()
@@ -298,6 +312,7 @@ class HeadsUpController extends ChangeNotifier {
     hoveredAction = null;
     hoveredPlan = null;
     _capture(action);
+    handLog.add(LineStep(true, action.type));
     _engine.applyAction(state, action);
     _rebuildRange();
     notifyListeners();
@@ -341,6 +356,7 @@ class HeadsUpController extends ChangeNotifier {
 
     final firstAction = _planFirst(plan.first);
     _capture(firstAction);
+    handLog.add(LineStep(true, firstAction.type));
     _engine.applyAction(state, firstAction);
     _rebuildRange();
     notifyListeners();
@@ -355,6 +371,7 @@ class HeadsUpController extends ChangeNotifier {
         await Future<void>.delayed(_stepDelay);
         final secondAction = _planSecond(plan.second, v);
         _capture(secondAction);
+        handLog.add(LineStep(true, secondAction.type));
         _engine.applyAction(state, secondAction);
         _rebuildRange();
         notifyListeners();
@@ -407,7 +424,9 @@ class HeadsUpController extends ChangeNotifier {
       final node = _botNode();
       final move = profile.moveAt(node, view.myCard.rank.value);
       _narrowByMove(node, move); // the action reveals info about its range
-      _engine.applyAction(state, _moveAction(move, view));
+      final botAction = _moveAction(move, view);
+      handLog.add(LineStep(false, botAction.type));
+      _engine.applyAction(state, botAction);
       _rebuildRange();
       notifyListeners();
     }
@@ -469,7 +488,9 @@ class HeadsUpController extends ChangeNotifier {
       notifyListeners();
       return;
     }
-    _engine.applyAction(state, _moveAction(move, view));
+    final autoAction = _moveAction(move, view);
+    handLog.add(LineStep(true, autoAction.type));
+    _engine.applyAction(state, autoAction);
     _rebuildRange();
     notifyListeners();
     await _botRespond();
